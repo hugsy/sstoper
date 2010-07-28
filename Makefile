@@ -1,5 +1,6 @@
 CC	= gcc
-CFLAGS 	= -Werror -ansi -gdb 
+CFLAGS 	= -Werror -ansi $(DBGFLAGS)
+DBGFLAGS= -D_DEBUG_ON -ggdb
 RM	= rm -fr
 LIB	= -lgnutls
 INC	= 
@@ -25,4 +26,5 @@ server :
 	--x509certfile $(TEST)/x509-server.pem
 
 client : sstpclient
-	./$< -s localhost -p 5556 
+	./$< -s localhost -p 5556 \
+	-t $(TEST)/x509-trust.pem
