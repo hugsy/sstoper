@@ -14,11 +14,13 @@
 #define LOG(x) ( fprintf(stdout, x) )
 #define ERR(x) ( fprintf(stderr, x) )
 
+#define RBUF_SIZE 1024
+
+
 typedef struct 
 {
   int verbose;
   char* server;
-  /* char port[6]; */
   char* port;  
   char* ca_file;
   
@@ -60,6 +62,7 @@ void usage(char* name, FILE* fd, int retcode)
   fprintf(fd, "%s -s server\n", name);
   exit(retcode);
 }
+
 
 void parse_options (sstp_config* cfg, int argc, char** argv)
 {
@@ -114,63 +117,82 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
     }
 }
 
+
 int init_tcp(char* hostname, char* port)
 {
   int sockfd;
-  struct addrinfo *hostinfo, *result, *rp;
+  struct addrinfo *hostinfo, *res, *ll;
 
   hostinfo = (struct addrinfo*) xmalloc(sizeof(struct addrinfo));
-  
-  memset((void*)hostinfo, 0, sizeof(struct addrinfo));
-  hostinfo->ai_family = AF_INET;
-  hostinfo->ai_socktype = SOCK_DGRAM;
+  hostinfo->ai_family = AF_UNSPEC;
+  hostinfo->ai_socktype = SOCK_STREAM;
   hostinfo->ai_flags = 0;
   hostinfo->ai_protocol = 0;
 
-  if (getaddrinfo(hostname, port, hostinfo, &result) == -1)
+  printf("Connecting to: %s:%s ", hostname, port);
+  
+  if (getaddrinfo(hostname, port, hostinfo, &res) == -1)
     {
       perror("getaddrinfo");
       exit(-1);
     }
   
-  for (rp = result; rp != NULL; rp = rp->ai_next) {
-    if (rp == NULL)
-      break;
-    
-    sockfd = socket(rp->ai_family,
-		    rp->ai_socktype,
-		    rp->ai_protocol);
-    
-    if (sockfd == -1)
-      continue;
-    
-    if (connect(sockfd, rp->ai_addr, rp->ai_addrlen) != -1)
-      break;
+  for (ll=res; ; ll=ll->ai_next)
+    {
+      if (ll == NULL)
+	break;
 
-    close(sockfd);
-  }
+      printf("Trying: %s\n", ll->ai_canonname);
+      
+      sockfd = socket(ll->ai_family,
+		      ll->ai_socktype,
+		      ll->ai_protocol);
+    
+      if (sockfd == -1)
+	continue;
+    
+      if (connect(sockfd, ll->ai_addr, ll->ai_addrlen) == 0)
+	break;
+    
+      close(sockfd);
+    }
   
-  if (rp == NULL) {
-    ERR("Failed to create connection\n");
-    return EXIT_FAILURE;
-  }
+  if (ll == NULL)
+    {
+      ERR("Failed to create connection.\n");
+      perror("init_tcp");
+      return EXIT_FAILURE;
+    }
 
-  freeaddrinfo(result);
-  free((void*)hostinfo);
+  printf("\tOK [%d]\n", sockfd); 
+
+  freeaddrinfo(res);
  
   return sockfd;
 }
 
+
 int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
 {
   int retcode;
-
+  const char* err;
+  
   /* init and allocate */
   tls = (TLS*) xmalloc(sizeof (TLS));
   gnutls_global_init();
   gnutls_init( &(tls->session), GNUTLS_CLIENT );
 
   /* setup x509 */
+  retcode = gnutls_priority_set_direct (tls->session, "PERFORMANCE", &err);
+  if (retcode != GNUTLS_E_SUCCESS)
+    {
+      if (retcode == GNUTLS_E_INVALID_REQUEST)
+        {
+          ERR (err);
+        }
+      return retcode;
+    }  
+
   retcode = gnutls_certificate_allocate_credentials (&(tls->crt_creds));
   if (retcode != GNUTLS_E_SUCCESS )
     {
@@ -182,7 +204,7 @@ int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
   retcode = gnutls_certificate_set_x509_trust_file (tls->crt_creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
-      ERR("At least 1 crt must be valid.\n");
+      ERR("init_tls_session:At least 1 certificate must be valid.\n");
       gnutls_perror(retcode);
       return retcode;
     }
@@ -190,19 +212,20 @@ int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
   retcode = gnutls_credentials_set (tls->session, GNUTLS_CRD_CERTIFICATE, tls->crt_creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      ERR("tls_credentials_se\n");
+      ERR("init_tls_session:tls_credentials_set\n");
       gnutls_perror(retcode);
       return retcode;
     }
 
   
   /* bind gnutls session with the socket */
-  gnutls_transport_set_ptr (tls->session, (gnutls_transport_ptr_t) &sockfd);
+  /* fixme : gcc foire avec -Werror sur 64bits a cause de la conversion de type */
+  gnutls_transport_set_ptr (tls->session, (gnutls_transport_ptr_t) sockfd);
 
   
   /* proceed with handshake */
   retcode = gnutls_handshake (tls->session);
-  if (retcode != GNUTLS_E_SUCCESS ) 
+  if (retcode != GNUTLS_E_SUCCESS )
     {
       ERR("init_tls_session: gnutls_handshake\n");
       gnutls_perror (retcode);
@@ -221,6 +244,42 @@ void end_tls_session(TLS* tls, int sockfd, int reason)
   gnutls_deinit(tls->session);
   gnutls_global_deinit();
   free((void*) tls);
+}
+
+
+void gnutls_session_loop(TLS* tls)
+{
+  int rbytes = -1;
+  const char msg[] = "GET / HTTP/1.0\r\n\r\n";
+  char* rbuf;
+
+  rbuf = (char*) xmalloc(RBUF_SIZE * sizeof(char));
+  
+  gnutls_record_send (tls->session, msg, strlen (msg));
+
+  while (1)
+    {
+      memset(rbuf, 0, RBUF_SIZE);
+      rbytes = gnutls_record_recv (tls->session, rbuf, RBUF_SIZE-1);
+      
+      if (rbytes > 1)
+	{
+	  fprintf(stdout, "<-- Received %d bytes: ", rbytes);
+	  fprintf(stdout, "%s\n", rbuf);
+	}
+      else if (rbytes == 0)
+	{
+	  fprintf(stdout, "Connection has been closed.\n");
+	  break;
+	}
+      else 
+	{
+	  ERR("A problem has occured.\n");
+	  gnutls_perror(rbytes);
+	  break;
+	}      
+    }
+ 
 }
 
 
@@ -247,8 +306,12 @@ int main (int argc, char** argv)
   tls_session = (TLS*) xmalloc (sizeof (TLS));
   
   sockfd = init_tcp(cfg->server, cfg->port);
+  
   if (sockfd < 0)
     return EXIT_FAILURE;
+
+  write (sockfd, "hello\n", sizeof("hello\n"));
+  
   
   /* start gnutls session */
   if (init_tls_session(tls_session, sockfd, cfg) < 0)
@@ -256,6 +319,9 @@ int main (int argc, char** argv)
       ERR("Failed to initialize TLS session, leaving.\n");
       return EXIT_FAILURE;
     }
+
+  /* gnutls session */
+  gnutls_session_loop(tls_session);
   
   /* end gnutls session */
   gnutls_bye (tls_session->session, GNUTLS_SHUT_RDWR);
