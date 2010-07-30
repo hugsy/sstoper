@@ -1,12 +1,11 @@
 CC	= gcc
-CFLAGS 	= -Wall -ansi $(DBGFLAGS)
+CFLAGS 	= -Werror -ansi $(DBGFLAGS)
 DBGFLAGS= -D_DEBUG_ON -ggdb
 RM	= rm -fr
 LIB	= -lgnutls
 INC	= 
-VG	= /usr/bin/valgrind
 TEST	= test
-
+PARAMS  = -s localhost -p 5556 -t $(TEST)/x509-trust.pem -c $(TEST)/x509-client.pem -k $(TEST)/x509-client-key.pem
 
 all: sstpclient
 
@@ -17,7 +16,7 @@ clean :
 	$(RM) *.o sstpclient
 
 test : sstpclient
-	$(VG) $<
+	/usr/bin/valgrind --leak-check=full $< $(PARAMS)
 
 server :
 	gnutls-serv --http \
@@ -26,4 +25,4 @@ server :
 	--x509certfile $(TEST)/x509-server.pem
 
 client : sstpclient
-	./$< -s localhost -p 5556 -t $(TEST)/x509-trust.pem
+	./$< $(PARAMS)

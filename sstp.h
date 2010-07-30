@@ -18,6 +18,8 @@
  *
  */
 
+#include <stdint.h>
+
 /* SSTP Properties */
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
@@ -90,65 +92,30 @@ enum attr_status
   };
 
 
-/* structure definitions */
-static const value_string packet_types[] =
-  {
-    {SSTP_DATA_PACKET, "SSTP Data Packet"},
-    {SSTP_CONTROL_PACKET, "SSTP Control Packet"},
-    {0, NULL }
-  };
+/* data structures */
+struct __sstp_packet 
+{
+  uint8_t version;
+  uint8_t reserved;
+  uint16_t length;
+  /* void *data; */
+} sstp_packet_t;
 
-static const value_string message_types[] =
-  {
-    {SSTP_MSG_CALL_CONNECT_REQUEST, "SSTP_MSG_CALL_CONNECT_REQUEST"},
-    {SSTP_MSG_CALL_CONNECT_ACK, "SSTP_MSG_CALL_CONNECT_ACK"},
-    {SSTP_MSG_CALL_CONNECT_NAK, "SSTP_MSG_CALL_CONNECT_NAK"},
-    {SSTP_MSG_CALL_CONNECTED, "SSTP_MSG_CALL_CONNECTED"},
-    {SSTP_MSG_CALL_ABORT, "SSTP_MSG_CALL_ABORT"},
-    {SSTP_MSG_CALL_DISCONNECT, "SSTP_MSG_CALL_DISCONNECT"},
-    {SSTP_MSG_CALL_DISCONNECT_ACK, "SSTP_MSG_CALL_DISCONNECT_ACK"},
-    {SSTP_MSG_ECHO_REQUEST, "SSTP_MSG_ECHO_REQUEST" },
-    {SSTP_MSG_ECHO_RESPONSE, "SSTP_MSG_ECHO_RESPONSE" },
-    {0, NULL }
-  };
+struct __sstp_control_header 
+{
+  uint8_t message_type;
+  uint8_t num_attributes;
+  /* sstp_attribute_header_t **attributes; // linked-list attributes */
+} sstp_control_header_t;
 
-static const value_string attributes_ids[] =
-  {
-    {SSTP_ATTRIB_NO_ERROR, "SSTP_ATTRIB_NO_ERROR"},
-    {SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID, "SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID"},
-    {SSTP_ATTRIB_STATUS_INFO, "SSTP_ATTRIB_STATUS_INFO"},
-    {SSTP_ATTRIB_CRYPTO_BINDING, "SSTP_ATTRIB_CRYPTO_BINDING"},
-    {SSTP_ATTRIB_CRYPTO_BINDING_REQ, "SSTP_ATTRIB_CRYPTO_BINDING_REQ"},
-    {0, NULL }
-  };
+struct __sstp_attribute_header 
+{
+  uint8_t reserved;
+  uint8_t attribute_id;
+  uint16_t packet_length;
+  /* void *value; */
+} sstp_attribute_header_t;
 
-static const value_string encapsulated_protocol_id_ids[] =
-  {
-    { SSTP_ENCAPSULATED_PROTOCOL_PPP, "SSTP_ENCAPSULATED_PROTOCOL_PPP" },
-    {0, NULL }
-  };
 
-static const value_string hash_protocol_bitmasks[] = 
-  {
-    {CERT_HASH_PROTOCOL_SHA1, "CERT_HASH_PROTOCOL_SHA1"}, 
-    {CERT_HASH_PROTOCOL_SHA256, "CERT_HASH_PROTOCOL_SHA256"},
-    {0, NULL }    
-  };
-      
-static const value_string status_info[] =
-  {
-    {ATTRIB_STATUS_NO_ERROR, "ATTRIB_STATUS_NO_ERROR"},
-    {ATTRIB_STATUS_DUPLICATE_ATTRIBUTE, "ATTRIB_STATUS_DUPLICATE_ATTRIBUTE"},
-    {ATTRIB_STATUS_UNRECOGNIZED_ATTRIBUTE, "ATTRIB_STATUS_UNRECOGNIZED_ATTRIBUTE"},
-    {ATTRIB_STATUS_INVALID_ATTRIB_VALUE_LENGTH, "ATTRIB_STATUS_INVALID_ATTRIB_VALUE_LENGTH"},
-    {ATTRIB_STATUS_VALUE_NOT_SUPPORTED, "ATTRIB_STATUS_VALUE_NOT_SUPPORTED"},
-    {ATTRIB_STATUS_UNACCEPTED_FRAME_RECEIVED, "ATTRIB_STATUS_UNACCEPTED_FRAME_RECEIVED"}, 
-    {ATTRIB_STATUS_RETRY_COUNT_EXCEEDED, "ATTRIB_STATUS_RETRY_COUNT_EXCEEDED"},
-    {ATTRIB_STATUS_INVALID_FRAME_RECEIVED, "ATTRIB_STATUS_INVALID_FRAME_RECEIVED"},
-    {ATTRIB_STATUS_NEGOTIATION_TIMEOUT, "ATTRIB_STATUS_NEGOTIATION_TIMEOUT"},
-    {ATTRIB_STATUS_ATTRIB_NOT_SUPPORTED_IN_MSG, "ATTRIB_STATUS_ATTRIB_NOT_SUPPORTED_IN_MSG"},
-    {ATTRIB_STATUS_REQUIRED_ATTRIBUTE_MISSING, "ATTRIB_STATUS_REQUIRED_ATTRIBUTE_MISSING"}, 
-    {ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG, "ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG"},
-    {0, NULL }
-  };
-
+/* functions */
+int is_control_packet(sstp_packet_t *pkt);

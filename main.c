@@ -10,11 +10,25 @@
 #include <gnutls/gnutls.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <inttypes.h>
+#include <signal.h>
+
+#include "sstp.h"
+
+/* compat POSIX */
+extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
+
+
+#ifdef __x86_64
+typedef long sock_t;
+#else
+typedef int sock_t;
+#endif
 
 #define LOG(x) ( fprintf(stdout, x) )
 #define ERR(x) ( fprintf(stderr, x) )
-
-#define RBUF_SIZE 1024
+#define __UNSIGNED_LONG_LONG_MAX__ ((1<<(sizeof(unsigned long long)*8)) - 1LLU)
+#define BUFFER_SIZE 1024
 
 
 typedef struct 
@@ -23,8 +37,10 @@ typedef struct
   char* server;
   char* port;  
   char* ca_file;
-  
+  char* crt_file;
+  char* key_file;
 } sstp_config;
+
 
 typedef struct 
 {
@@ -33,13 +49,18 @@ typedef struct
 } TLS;
 
 void* xmalloc(size_t size);
-int init_tcp(char* hostname, char* port);
-int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg);
-void end_tls_session(TLS* tls, int sockfd, int reason);
+sock_t init_tcp(char* hostname, char* port);
+TLS* init_tls_session(sock_t, sstp_config*);
+void tls_session_loop(TLS*, sstp_config*);
+void end_tls_session(TLS*, sock_t, int reason);
 void usage(char* name, FILE* fd, int retcode);
 void parse_options (sstp_config* cfg, int argc, char** argv);
 
+
 TLS* tls_session;
+sock_t sockfd;
+sstp_config *cfg;
+
 
 void* xmalloc(size_t size)
 {
@@ -69,11 +90,13 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
   int curopt, curopt_idx;
  
   const struct option long_opts[] = {
-    { "help",    0, 0, 'h' },
-    { "verbose", 0, 0, 'v' },
-    { "server",  1, 0, 's' },
-    { "port",  1, 0, 'p' },
-    { "ca-file",  1, 0, 't' },
+    { "help",      0, 0, 'h' },
+    { "verbose",   0, 0, 'v' },
+    { "server",    1, 0, 's' },
+    { "port",      1, 0, 'p' },
+    { "ca-file",   1, 0, 't' },
+    { "crt-file",  1, 0, 'c' },
+    { "key-file",  1, 0, 'k' },
     { 0, 0, 0, 0 } 
   };
 
@@ -82,7 +105,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvs:p:t:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv, "hvs:p:t:c:k:", long_opts, &curopt_idx);
 
       if (curopt == -1)
 	break;
@@ -101,7 +124,6 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	  break;
 
 	case 'p':
-	  /* snprintf(cfg->port, 5, optarg); */
 	  cfg->port = optarg;
 	  break;
 
@@ -109,6 +131,14 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	  cfg->ca_file = optarg;
 	  break;
 
+	case 'k':
+	  cfg->key_file = optarg;
+	  break;
+
+	case 'c':
+	  cfg->crt_file = optarg;
+	  break;
+	  
 	case '?': 	  
 	default:
 	  usage (argv[0], stderr, 1);
@@ -118,9 +148,9 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 }
 
 
-int init_tcp(char* hostname, char* port)
+sock_t init_tcp(char* hostname, char* port)
 {
-  int sockfd;
+  sock_t sock;
   struct addrinfo *hostinfo, *res, *ll;
 
   hostinfo = (struct addrinfo*) xmalloc(sizeof(struct addrinfo));
@@ -137,24 +167,19 @@ int init_tcp(char* hostname, char* port)
       exit(-1);
     }
   
-  for (ll=res; ; ll=ll->ai_next)
+  for (ll=res; ll != NULL; ll=ll->ai_next)
     {
-      if (ll == NULL)
-	break;
-
-      printf("Trying: %s\n", ll->ai_canonname);
-      
-      sockfd = socket(ll->ai_family,
-		      ll->ai_socktype,
-		      ll->ai_protocol);
+      sock = socket(ll->ai_family,
+		    ll->ai_socktype,
+		    ll->ai_protocol);
     
-      if (sockfd == -1)
+      if (sock == -1)
 	continue;
     
-      if (connect(sockfd, ll->ai_addr, ll->ai_addrlen) == 0)
+      if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
 	break;
     
-      close(sockfd);
+      close(sock);
     }
   
   if (ll == NULL)
@@ -164,24 +189,26 @@ int init_tcp(char* hostname, char* port)
       return EXIT_FAILURE;
     }
 
-  printf("\tOK [%d]\n", sockfd); 
+  printf("\tOK [%ld]\n", sock);
 
   freeaddrinfo(res);
  
-  return sockfd;
+  return sock;
 }
 
 
-int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
+TLS* init_tls_session(sock_t sock, sstp_config* cfg)
 {
   int retcode;
   const char* err;
+  TLS* tls;
+
   
   /* init and allocate */
-  tls = (TLS*) xmalloc(sizeof (TLS));
+  tls = (TLS*) xmalloc(sizeof(TLS));
   gnutls_global_init();
   gnutls_init( &(tls->session), GNUTLS_CLIENT );
-
+  
   /* setup x509 */
   retcode = gnutls_priority_set_direct (tls->session, "PERFORMANCE", &err);
   if (retcode != GNUTLS_E_SUCCESS)
@@ -190,7 +217,7 @@ int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
         {
           ERR (err);
         }
-      return retcode;
+      return NULL;
     }  
 
   retcode = gnutls_certificate_allocate_credentials (&(tls->crt_creds));
@@ -198,29 +225,42 @@ int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
     {
       ERR("gnutls_certificate_allocate_credentials\n");
       gnutls_perror(retcode);
-      return retcode;
+      return NULL;
     }
 
+  /* setting ca trust list */
   retcode = gnutls_certificate_set_x509_trust_file (tls->crt_creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
       ERR("init_tls_session:At least 1 certificate must be valid.\n");
       gnutls_perror(retcode);
-      return retcode;
+      return NULL;
     }
-  
+
+  /* setting client private key */
+  retcode = gnutls_certificate_set_x509_key_file (tls->crt_creds,
+						  cfg->crt_file,
+						  cfg->key_file,
+						  GNUTLS_X509_FMT_PEM);
+  if (retcode != GNUTLS_E_SUCCESS )
+    {
+      ERR("init_tls_session:gnutls_certificate_set_x509_key_file\n");
+      gnutls_perror(retcode);
+      return NULL;
+    }  
+
+  /* applying settings to session */
   retcode = gnutls_credentials_set (tls->session, GNUTLS_CRD_CERTIFICATE, tls->crt_creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
       ERR("init_tls_session:tls_credentials_set\n");
       gnutls_perror(retcode);
-      return retcode;
+      return NULL;
     }
 
   
   /* bind gnutls session with the socket */
-  /* fixme : gcc foire avec -Werror sur 64bits a cause de la conversion de type */
-  gnutls_transport_set_ptr (tls->session, (gnutls_transport_ptr_t) sockfd);
+  gnutls_transport_set_ptr (tls->session, (gnutls_transport_ptr_t) sock);
 
   
   /* proceed with handshake */
@@ -230,102 +270,155 @@ int init_tls_session(TLS* tls, int sockfd, sstp_config* cfg)
       ERR("init_tls_session: gnutls_handshake\n");
       gnutls_perror (retcode);
       end_tls_session(tls, sockfd, retcode);
-      return retcode;
+      return NULL;
     }
-    
-  return retcode;
+
+  return tls;
 }
 
 
-void end_tls_session(TLS* tls, int sockfd, int reason)
+void end_tls_session(TLS* tls, sock_t sock, int reason)
 {
-  shutdown(sockfd, SHUT_RDWR);
-  close(sockfd);
+  shutdown(sock, SHUT_RDWR);
+  close(sock);
   gnutls_deinit(tls->session);
   gnutls_global_deinit();
   free((void*) tls);
 }
 
 
-void gnutls_session_loop(TLS* tls)
+void tls_session_loop(TLS* tls, sstp_config* cfg)
 {
-  int rbytes = -1;
-  const char msg[] = "GET / HTTP/1.0\r\n\r\n";
-  char* rbuf;
+  int rbytes;
+  char* buf;
 
-  rbuf = (char*) xmalloc(RBUF_SIZE * sizeof(char));
+  rbytes = -1;
+  buf = (char*) xmalloc(BUFFER_SIZE * sizeof(char));
+
+  snprintf(buf, BUFFER_SIZE,
+	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
+	   "Host: %s\r\n"
+	   "Content-Length: %llu\r\n"
+	   "SSTPCORRELATIONID: %ld\r\n"
+	   "\r\n\r\n",
+	   cfg->server,
+	   __UNSIGNED_LONG_LONG_MAX__,
+	   (long) 0);
+
+  fprintf(stdout, "--> Sending %ld bytes\n",(strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf)));
+  fprintf(stdout, "%s\n", buf);
   
-  gnutls_record_send (tls->session, msg, strlen (msg));
-
-  while (1)
-    {
-      memset(rbuf, 0, RBUF_SIZE);
-      rbytes = gnutls_record_recv (tls->session, rbuf, RBUF_SIZE-1);
+  gnutls_record_send (tls->session, buf, (strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf))); 
+  
+  memset(buf, 0, BUFFER_SIZE);
+  rbytes = gnutls_record_recv (tls->session, buf, BUFFER_SIZE-1);
       
-      if (rbytes > 1)
-	{
-	  fprintf(stdout, "<-- Received %d bytes: ", rbytes);
-	  fprintf(stdout, "%s\n", rbuf);
-	}
-      else if (rbytes == 0)
-	{
-	  fprintf(stdout, "Connection has been closed.\n");
-	  break;
-	}
-      else 
-	{
-	  ERR("A problem has occured.\n");
-	  gnutls_perror(rbytes);
-	  break;
-	}      
+  if (rbytes > 1)
+    {
+      fprintf(stdout, "<-- Received %d bytes\n", rbytes);
+      fprintf(stdout, "%s\n", buf);
     }
- 
+  else if (rbytes == 0)
+    {
+      fprintf(stdout, "!! Connection has been closed !!\n");
+      return;
+    }
+  else 
+    {
+      ERR("A problem has occured.\n");
+      gnutls_perror(rbytes);
+      return;
+    }
+
+  if (strstr(buf, "HTTP/1.1 200") == NULL) 
+    return;
+  
+  fprintf(stdout, "Initiating SSTP negociation\n");
 }
 
+void sighandle(int signum)
+{
+  switch(signum) 
+    {
+    case SIGINT:
+    case SIGTERM:
+      fprintf(stdout, "SIG: Closing connection\n");
+      fflush(stdout);
+      end_tls_session(tls_session, sockfd, 0);
+      break;
+    }
+}
 
 int main (int argc, char** argv) 
 {
-  
-  sstp_config *cfg;
-  int sockfd;
-  
+  sigset_t sigset;
+  struct sigaction saction;
+
+  /* SIGTERM and SIGINT close the connection properly */
+  /* set sigaction */
+  saction.sa_mask    = sigset;
+  saction.sa_flags   = 0;
+  saction.sa_handler = sighandle;
+
+  /* set signal bitmask*/
+  sigemptyset(&sigset);
+  sigfillset(&sigset);
+  sigdelset(&sigset, SIGTERM);
+  sigdelset(&sigset, SIGINT);
+  sigprocmask(SIG_SETMASK, &sigset, NULL);
+
+  /* apply action to signal in bitmask */
+  sigaction(SIGINT, &saction, NULL);
+  sigaction(SIGTERM, &saction, NULL);
+
+  /* configuration parsing */
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
   cfg->server = NULL;
   cfg->verbose = 0;
     
   parse_options(cfg, argc, argv);
 
-  if (cfg->server == NULL) {
-    fprintf(stderr, "Missing required arg server\n");
-    return EXIT_FAILURE;
-  }
-
+  if (cfg->server == NULL)
+    {
+      fprintf(stderr, "Missing required arg server\n");
+      return EXIT_FAILURE;
+    }
+  if (cfg->ca_file == NULL)
+    {
+      fprintf(stderr, "Missing required trusted CA file\n");
+      return EXIT_FAILURE;
+    }
+  if (cfg->crt_file == NULL)
+    {
+      fprintf(stderr, "Missing required certificate file\n");
+      return EXIT_FAILURE;
+    }
+  if (cfg->key_file == NULL)
+    {
+      fprintf(stderr, "Missing required private key file\n");
+      return EXIT_FAILURE;
+    }  
   if (cfg->port == NULL)
     cfg->port = "443";
 
-  tls_session = (TLS*) xmalloc (sizeof (TLS));
-  
   sockfd = init_tcp(cfg->server, cfg->port);
   
   if (sockfd < 0)
     return EXIT_FAILURE;
 
-  write (sockfd, "hello\n", sizeof("hello\n"));
-  
-  
-  /* start gnutls session */
-  if (init_tls_session(tls_session, sockfd, cfg) < 0)
+  /* allocate and start gnutls session */
+  tls_session = init_tls_session(sockfd, cfg); 
+  if (tls_session == NULL)
     {
       ERR("Failed to initialize TLS session, leaving.\n");
       return EXIT_FAILURE;
     }
 
-  /* gnutls session */
-  gnutls_session_loop(tls_session);
+  /* gnutls session itself goes here */
+  tls_session_loop(tls_session, cfg);
   
-  /* end gnutls session */
+  /* end gnutls session and free allocated memory */
   gnutls_bye (tls_session->session, GNUTLS_SHUT_RDWR);
-
   end_tls_session(tls_session, sockfd, 0);
   free((void*) cfg);
   
