@@ -1,23 +1,3 @@
-/*
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
- *
- * Also see :
- * - MS-SSTP : http://msdn.microsoft.com/en-us/library/cc247338(PROT.10).aspx
- *
- */
-
 #include <stdint.h>
 
 /* SSTP Properties */
@@ -93,29 +73,30 @@ enum attr_status
 
 
 /* data structures */
-struct __sstp_packet 
+typedef struct __sstp_header
 {
   uint8_t version;
   uint8_t reserved;
   uint16_t length;
-  /* void *data; */
-} sstp_packet_t;
+  void* data;
+} sstp_header_t;
 
-struct __sstp_control_header 
+typedef struct __sstp_control_header 
 {
   uint8_t message_type;
   uint8_t num_attributes;
-  /* sstp_attribute_header_t **attributes; // linked-list attributes */
 } sstp_control_header_t;
 
-struct __sstp_attribute_header 
+typedef struct __sstp_attribute_header 
 {
   uint8_t reserved;
   uint8_t attribute_id;
   uint16_t packet_length;
-  /* void *value; */
+  void* data;
 } sstp_attribute_header_t;
 
 
-/* functions */
-int is_control_packet(sstp_packet_t *pkt);
+
+/* functions declarations  */
+void init_sstp(gnutls_session_t* tls);
+int is_control_packet(sstp_header_t* pkt_hdr);

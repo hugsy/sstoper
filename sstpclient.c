@@ -12,10 +12,11 @@
 #include <sys/socket.h>
 #include <inttypes.h>
 #include <signal.h>
+#include <stdarg.h>
 
-#include "sstp.h"
+#include "libsstp.h"
 
-/* compat POSIX */
+/* compat ansi */
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
 
 
@@ -25,9 +26,8 @@ typedef long sock_t;
 typedef int sock_t;
 #endif
 
-#define LOG(x) ( fprintf(stdout, x) )
-#define ERR(x) ( fprintf(stderr, x) )
-#define __UNSIGNED_LONG_LONG_MAX__ ((1<<(sizeof(unsigned long long)*8)) - 1LLU)
+
+#define __UNSIGNED_LONG_LONG_MAX__ ((1LLU<<(sizeof(unsigned long long)*8)) - 1LLU)
 #define BUFFER_SIZE 1024
 
 
@@ -42,24 +42,52 @@ typedef struct
 } sstp_config;
 
 
-typedef struct 
-{
-  gnutls_session_t session;
-  gnutls_certificate_credentials_t crt_creds;
-} TLS;
-
+void xlog(int type, char* fmt, ...);
 void* xmalloc(size_t size);
 sock_t init_tcp(char* hostname, char* port);
-TLS* init_tls_session(sock_t, sstp_config*);
-void tls_session_loop(TLS*, sstp_config*);
-void end_tls_session(TLS*, sock_t, int reason);
+gnutls_session_t* init_tls_session(sock_t, sstp_config*);
+void tls_session_loop(gnutls_session_t*, sstp_config*);
+void end_tls_session(gnutls_session_t*, sock_t, int reason);
 void usage(char* name, FILE* fd, int retcode);
 void parse_options (sstp_config* cfg, int argc, char** argv);
 
-
-TLS* tls_session;
+gnutls_session_t* tls_session;
 sock_t sockfd;
 sstp_config *cfg;
+
+
+
+enum 
+  {
+    LOG_DEBUG = 0,
+    LOG_INFO,
+    LOG_ERROR
+  };
+
+void xlog(int type, char* fmt, ...) 
+{
+  va_list ap;
+  
+  va_start(ap, fmt);
+  
+  switch (type) 
+    {
+    case LOG_DEBUG:
+    case LOG_INFO:
+      fprintf(stdout, fmt, ap);
+      break;
+
+    case LOG_ERROR:
+      fprintf(stderr, fmt, ap);
+      break;
+
+    default:
+      fprintf(stderr, "[ERROR] Unknown format\n");
+      exit(1);
+    }
+  
+  va_end(ap);
+}
 
 
 void* xmalloc(size_t size)
@@ -184,9 +212,9 @@ sock_t init_tcp(char* hostname, char* port)
   
   if (ll == NULL)
     {
-      ERR("Failed to create connection.\n");
+      xlog(LOG_ERROR, "Failed to create connection.\n");
       perror("init_tcp");
-      return EXIT_FAILURE;
+      return -1;
     }
 
   printf("\tOK [%ld]\n", sock);
@@ -197,77 +225,78 @@ sock_t init_tcp(char* hostname, char* port)
 }
 
 
-TLS* init_tls_session(sock_t sock, sstp_config* cfg)
+gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
 {
   int retcode;
   const char* err;
-  TLS* tls;
+  gnutls_session_t* tls;
+  gnutls_certificate_credentials_t creds;
 
   
   /* init and allocate */
-  tls = (TLS*) xmalloc(sizeof(TLS));
+  tls = (gnutls_session_t*) xmalloc(sizeof(gnutls_session_t));
   gnutls_global_init();
-  gnutls_init( &(tls->session), GNUTLS_CLIENT );
+  gnutls_init(tls, GNUTLS_CLIENT);
   
   /* setup x509 */
-  retcode = gnutls_priority_set_direct (tls->session, "PERFORMANCE", &err);
+  retcode = gnutls_priority_set_direct (*tls, "PERFORMANCE", &err);
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
         {
-          ERR (err);
+          xlog(LOG_ERROR, (char*)err);
         }
       return NULL;
-    }  
+    }
 
-  retcode = gnutls_certificate_allocate_credentials (&(tls->crt_creds));
+  retcode = gnutls_certificate_allocate_credentials (&creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      ERR("gnutls_certificate_allocate_credentials\n");
+      xlog(LOG_ERROR, "gnutls_certificate_allocate_credentials\n");
       gnutls_perror(retcode);
       return NULL;
     }
 
   /* setting ca trust list */
-  retcode = gnutls_certificate_set_x509_trust_file (tls->crt_creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
+  retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
-      ERR("init_tls_session:At least 1 certificate must be valid.\n");
+      xlog(LOG_ERROR, "init_tls_session:At least 1 certificate must be valid.\n");
       gnutls_perror(retcode);
       return NULL;
     }
 
   /* setting client private key */
-  retcode = gnutls_certificate_set_x509_key_file (tls->crt_creds,
+  retcode = gnutls_certificate_set_x509_key_file (creds,
 						  cfg->crt_file,
 						  cfg->key_file,
 						  GNUTLS_X509_FMT_PEM);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      ERR("init_tls_session:gnutls_certificate_set_x509_key_file\n");
+      xlog(LOG_ERROR, "init_tls_session:gnutls_certificate_set_x509_key_file\n");
       gnutls_perror(retcode);
       return NULL;
     }  
 
   /* applying settings to session */
-  retcode = gnutls_credentials_set (tls->session, GNUTLS_CRD_CERTIFICATE, tls->crt_creds);
+  retcode = gnutls_credentials_set (*tls, GNUTLS_CRD_CERTIFICATE, creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      ERR("init_tls_session:tls_credentials_set\n");
+      xlog(LOG_ERROR, "init_tls_session:tls_credentials_set\n");
       gnutls_perror(retcode);
       return NULL;
     }
 
   
   /* bind gnutls session with the socket */
-  gnutls_transport_set_ptr (tls->session, (gnutls_transport_ptr_t) sock);
+  gnutls_transport_set_ptr (*tls, (gnutls_transport_ptr_t) sock);
 
   
   /* proceed with handshake */
-  retcode = gnutls_handshake (tls->session);
+  retcode = gnutls_handshake (*tls);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      ERR("init_tls_session: gnutls_handshake\n");
+      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n");
       gnutls_perror (retcode);
       end_tls_session(tls, sockfd, retcode);
       return NULL;
@@ -277,17 +306,17 @@ TLS* init_tls_session(sock_t sock, sstp_config* cfg)
 }
 
 
-void end_tls_session(TLS* tls, sock_t sock, int reason)
+void end_tls_session(gnutls_session_t* tls, sock_t sock, int reason)
 {
   shutdown(sock, SHUT_RDWR);
   close(sock);
-  gnutls_deinit(tls->session);
+  gnutls_deinit(*tls);
   gnutls_global_deinit();
   free((void*) tls);
 }
 
 
-void tls_session_loop(TLS* tls, sstp_config* cfg)
+void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
 {
   int rbytes;
   char* buf;
@@ -308,10 +337,10 @@ void tls_session_loop(TLS* tls, sstp_config* cfg)
   fprintf(stdout, "--> Sending %ld bytes\n",(strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf)));
   fprintf(stdout, "%s\n", buf);
   
-  gnutls_record_send (tls->session, buf, (strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf))); 
+  gnutls_record_send (*tls, buf, (strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf))); 
   
   memset(buf, 0, BUFFER_SIZE);
-  rbytes = gnutls_record_recv (tls->session, buf, BUFFER_SIZE-1);
+  rbytes = gnutls_record_recv (*tls, buf, BUFFER_SIZE-1);
       
   if (rbytes > 1)
     {
@@ -325,7 +354,7 @@ void tls_session_loop(TLS* tls, sstp_config* cfg)
     }
   else 
     {
-      ERR("A problem has occured.\n");
+      xlog(LOG_ERROR, "A problem has occured.\n");
       gnutls_perror(rbytes);
       return;
     }
@@ -333,7 +362,11 @@ void tls_session_loop(TLS* tls, sstp_config* cfg)
   if (strstr(buf, "HTTP/1.1 200") == NULL) 
     return;
   
-  fprintf(stdout, "Initiating SSTP negociation\n");
+  xlog(LOG_INFO, "Initiating SSTP negociation\n");
+  init_sstp(tls);
+  
+  xlog(LOG_INFO, "SSTP dialog end\n");
+  return;
 }
 
 void sighandle(int signum)
@@ -354,6 +387,7 @@ int main (int argc, char** argv)
   sigset_t sigset;
   struct sigaction saction;
 
+  
   /* SIGTERM and SIGINT close the connection properly */
   /* set sigaction */
   saction.sa_mask    = sigset;
@@ -410,7 +444,7 @@ int main (int argc, char** argv)
   tls_session = init_tls_session(sockfd, cfg); 
   if (tls_session == NULL)
     {
-      ERR("Failed to initialize TLS session, leaving.\n");
+      xlog(LOG_ERROR, "Failed to initialize TLS session, leaving.\n");
       return EXIT_FAILURE;
     }
 
@@ -418,7 +452,7 @@ int main (int argc, char** argv)
   tls_session_loop(tls_session, cfg);
   
   /* end gnutls session and free allocated memory */
-  gnutls_bye (tls_session->session, GNUTLS_SHUT_RDWR);
+  
   end_tls_session(tls_session, sockfd, 0);
   free((void*) cfg);
   
