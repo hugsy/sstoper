@@ -1,6 +1,7 @@
 CC	= gcc
-# CFLAGS 	= -Werror -ansi $(DBGFLAGS) # pb avec le ULONGLONG_MAX : left shift count >= width of type
-CFLAGS 	= -Wall -ansi $(DBGFLAGS)
+CFLAGS 	= -Werror -ansi 
+# CFLAGS 	= -Wall -ansi 
+CFLAGS 	+= $(DBGFLAGS) # pb avec le ULONGLONG_MAX : left shift count >= width of type
 DBGFLAGS= -D_DEBUG_ON -ggdb
 RM	= rm -fr
 INC	= -L.

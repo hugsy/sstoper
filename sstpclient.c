@@ -140,34 +140,14 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       
       switch (curopt)
 	{
-	case 'h':
-	  usage (argv[0], stdout, 0);
-	  
-	case 'v':
-	  cfg->verbose = 1;
-	  break;
-
-	case 's':
-	  cfg->server = optarg;
-	  break;
-
-	case 'p':
-	  cfg->port = optarg;
-	  break;
-
-	case 't':
-	  cfg->ca_file = optarg;
-	  break;
-
-	case 'k':
-	  cfg->key_file = optarg;
-	  break;
-
-	case 'c':
-	  cfg->crt_file = optarg;
-	  break;
-	  
-	case '?': 	  
+	case 'h': usage (argv[0], stdout, 0);
+	case 'v': cfg->verbose = 1; break;
+	case 's': cfg->server = optarg; break;
+	case 'p': cfg->port = optarg; break;
+	case 't': cfg->ca_file = optarg; break;
+	case 'k': cfg->key_file = optarg; break;
+	case 'c': cfg->crt_file = optarg; break;	  
+	case '?':
 	default:
 	  usage (argv[0], stderr, 1);
 	}
