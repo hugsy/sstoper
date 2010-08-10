@@ -1,0 +1,4 @@
+libsstp.o
+sstpclient
+sstpclient.o
+*.o

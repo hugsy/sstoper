@@ -27,9 +27,6 @@ typedef int sock_t;
 #endif
 
 
-#define __UNSIGNED_LONG_LONG_MAX__ ((1LLU<<(sizeof(unsigned long long)*8)) - 1LLU)
-#define BUFFER_SIZE 1024
-
 
 typedef struct 
 {
@@ -43,7 +40,6 @@ typedef struct
 
 
 void xlog(int type, char* fmt, ...);
-void* xmalloc(size_t size);
 sock_t init_tcp(char* hostname, char* port);
 gnutls_session_t* init_tls_session(sock_t, sstp_config*);
 void tls_session_loop(gnutls_session_t*, sstp_config*);

@@ -3,6 +3,8 @@
 /* SSTP Properties */
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
+#define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
+#define BUFFER_SIZE 1024
 
 
 /* SSTP Packet Type */
@@ -78,25 +80,26 @@ typedef struct __sstp_header
   uint8_t version;
   uint8_t reserved;
   uint16_t length;
-  void* data;
-} sstp_header_t;
+} sstp_header_t; 
 
 typedef struct __sstp_control_header 
 {
-  uint8_t message_type;
-  uint8_t num_attributes;
-} sstp_control_header_t;
+  uint16_t message_type;
+  uint16_t num_attributes;
+} sstp_control_header_t; 
 
 typedef struct __sstp_attribute_header 
 {
   uint8_t reserved;
   uint8_t attribute_id;
   uint16_t packet_length;
-  void* data;
-} sstp_attribute_header_t;
+} sstp_attribute_header_t; 
 
 
 
 /* functions declarations  */
-void init_sstp(gnutls_session_t* tls);
-int is_control_packet(sstp_header_t* pkt_hdr);
+void init_sstp(gnutls_session_t*);
+int is_control_packet(sstp_header_t*);
+void* xmalloc(size_t);
+void sstp_send(gnutls_session_t*, void*, size_t);
+void* sstp_recv(gnutls_session_t*);
