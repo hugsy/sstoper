@@ -59,7 +59,7 @@ void send_sstp_packet(gnutls_session_t* tls, int type, void* data, size_t len)
 
   total_length = sizeof(sstp_header_t) + len;
 #ifdef _DEBUG_ON
-  printf("header:%lu data:%lu\n", sizeof(sstp_header_t) , len );
+  printf("header:%lu data:%lu\n", sizeof(sstp_header_t), len);
 #endif
   pkt = xmalloc(total_length);
   memcpy(pkt, &pkt_hdr, sizeof(sstp_header_t));
