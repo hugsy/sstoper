@@ -304,11 +304,11 @@ void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
 	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
 	   "Host: %s\r\n"
 	   "Content-Length: %llu\r\n"
-	   "SSTPCORRELATIONID: %ld\r\n"
+	   "SSTPCORRELATIONID: %s\r\n"
 	   "\r\n\r\n",
 	   cfg->server,
 	   __UNSIGNED_LONG_LONG_MAX__,
-	   (long) 0);
+	   __CORRELATION_ID__);
 
   fprintf(stdout, "--> Sending %ld bytes\n",(strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf)));
   fprintf(stdout, "%s\n", buf);
@@ -362,7 +362,6 @@ int main (int argc, char** argv)
 {
   sigset_t sigset;
   struct sigaction saction;
-
   
   /* SIGTERM and SIGINT close the connection properly */
   /* set sigaction */
