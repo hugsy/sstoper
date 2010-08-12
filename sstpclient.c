@@ -261,13 +261,18 @@ void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
   rbytes = -1;
   buf = (char*) xmalloc(BUFFER_SIZE * sizeof(char));
 
+  /* SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 */
+  /* SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7} */
+  /* Content-Length: 18446744073709551615 */
+  /* Host: vpn.coyote.looney */
+  /* "ClientByPassHLAuth: True\r\n" */
+  /* "ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592\r\n" */
+    
   snprintf(buf, BUFFER_SIZE-1,
 	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
 	   "Host: %s\r\n"
 	   "Content-Length: %llu\r\n"
 	   "SSTPCORRELATIONID: %s\r\n"
-	   /* "ClientByPassHLAuth: True\r\n" */
-	   /* "ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592\r\n" */
 	   "\r\n\r\n",
 	   cfg->server,
 	   __UNSIGNED_LONG_LONG_MAX__,
