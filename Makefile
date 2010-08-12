@@ -1,5 +1,5 @@
 CC	= gcc
-CFLAGS 	= -Werror -ansi 
+CFLAGS 	= -Werror 
 CFLAGS 	+= $(DBGFLAGS)
 DBGFLAGS= -D_DEBUG_ON -ggdb
 RM	= rm -fr
@@ -17,8 +17,11 @@ sstpclient: sstpclient.o libsstp.o
 clean :
 	$(RM) *.o sstpclient
 
-test : sstpclient
+valgrind : sstpclient
 	/usr/bin/valgrind --leak-check=full $< $(PARAMS)
+
+efence : sstpclient
+	/usr/bin/ef $< $(PARAMS)
 
 server :
 	gnutls-serv --http \

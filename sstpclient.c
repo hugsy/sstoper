@@ -14,53 +14,14 @@
 #include <signal.h>
 #include <stdarg.h>
 
+#include "sstpclient.h"
 #include "libsstp.h"
-
-/* compat ansi */
-extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
-
-
-#ifdef __x86_64
-typedef long sock_t;
-#else
-typedef int sock_t;
-#endif
-
-
-
-typedef struct 
-{
-  int verbose;
-  char* server;
-  char* port;  
-  char* ca_file;
-  char* crt_file;
-  char* key_file;
-} sstp_config;
-
-
-void xlog(int type, char* fmt, ...);
-sock_t init_tcp(char* hostname, char* port);
-gnutls_session_t* init_tls_session(sock_t, sstp_config*);
-void tls_session_loop(gnutls_session_t*, sstp_config*);
-void end_tls_session(gnutls_session_t*, sock_t, int reason);
-void usage(char* name, FILE* fd, int retcode);
-void parse_options (sstp_config* cfg, int argc, char** argv);
 
 gnutls_session_t* tls_session;
 sock_t sockfd;
 sstp_config *cfg;
 
-
-
-enum 
-  {
-    LOG_DEBUG = 0,
-    LOG_INFO,
-    LOG_ERROR
-  };
-
-void xlog(int type, char* fmt, ...) 
+void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;
   
@@ -70,11 +31,11 @@ void xlog(int type, char* fmt, ...)
     {
     case LOG_DEBUG:
     case LOG_INFO:
-      fprintf(stdout, fmt, ap);
+      vfprintf(stdout, fmt, ap);
       break;
 
     case LOG_ERROR:
-      fprintf(stderr, fmt, ap);
+      vfprintf(stderr, fmt, ap);
       break;
 
     default:
@@ -163,7 +124,7 @@ sock_t init_tcp(char* hostname, char* port)
   hostinfo->ai_flags = 0;
   hostinfo->ai_protocol = 0;
 
-  printf("Connecting to: %s:%s ", hostname, port);
+  xlog(LOG_INFO, "Connecting to: %s:%s ", hostname, port);
   
   if (getaddrinfo(hostname, port, hostinfo, &res) == -1)
     {
@@ -294,38 +255,44 @@ void end_tls_session(gnutls_session_t* tls, sock_t sock, int reason)
 
 void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
 {
-  int rbytes;
+  ssize_t rbytes;
   char* buf;
 
   rbytes = -1;
   buf = (char*) xmalloc(BUFFER_SIZE * sizeof(char));
 
-  snprintf(buf, BUFFER_SIZE,
+  snprintf(buf, BUFFER_SIZE-1,
 	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
 	   "Host: %s\r\n"
 	   "Content-Length: %llu\r\n"
 	   "SSTPCORRELATIONID: %s\r\n"
+	   /* "ClientByPassHLAuth: True\r\n" */
+	   /* "ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592\r\n" */
 	   "\r\n\r\n",
 	   cfg->server,
 	   __UNSIGNED_LONG_LONG_MAX__,
 	   __CORRELATION_ID__);
 
-  fprintf(stdout, "--> Sending %ld bytes\n",(strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf)));
-  fprintf(stdout, "%s\n", buf);
-  
-  gnutls_record_send (*tls, buf, (strlen(buf) > BUFFER_SIZE ? BUFFER_SIZE : strlen(buf))); 
+
+#ifdef _DEBUG_ON
+  xlog(LOG_DEBUG, "Sending: %s\n", buf);
+#endif 
+  gnutls_record_send (*tls, buf, strlen(buf)); 
+  xlog(LOG_INFO, "--> %lu bytes\n", strlen(buf));
   
   memset(buf, 0, BUFFER_SIZE);
   rbytes = gnutls_record_recv (*tls, buf, BUFFER_SIZE-1);
       
   if (rbytes > 1)
     {
-      fprintf(stdout, "<-- Received %d bytes\n", rbytes);
-      fprintf(stdout, "%s\n", buf);
+      xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
+#ifdef _DEBUG_ON      
+      xlog(LOG_DEBUG , "Received: %s\n", buf);
+#endif       
     }
   else if (rbytes == 0)
     {
-      fprintf(stdout, "!! Connection has been closed !!\n");
+      xlog(LOG_INFO , "!! Connection has been closed !!\n");
       return;
     }
   else 
@@ -340,10 +307,10 @@ void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
   
   xlog(LOG_INFO, "Initiating SSTP negociation\n");
   init_sstp(tls);
-  
   xlog(LOG_INFO, "SSTP dialog end\n");
-  return;
+
 }
+
 
 void sighandle(int signum)
 {
@@ -351,12 +318,13 @@ void sighandle(int signum)
     {
     case SIGINT:
     case SIGTERM:
-      fprintf(stdout, "SIG: Closing connection\n");
+      xlog(LOG_INFO, "SIG: Closing connection\n");
       fflush(stdout);
       end_tls_session(tls_session, sockfd, 0);
       break;
     }
 }
+
 
 int main (int argc, char** argv) 
 {
@@ -389,22 +357,22 @@ int main (int argc, char** argv)
 
   if (cfg->server == NULL)
     {
-      fprintf(stderr, "Missing required arg server\n");
+      xlog(LOG_ERROR, "Missing required arg server\n");
       return EXIT_FAILURE;
     }
   if (cfg->ca_file == NULL)
     {
-      fprintf(stderr, "Missing required trusted CA file\n");
+      xlog(LOG_ERROR, "Missing required trusted CA file\n");
       return EXIT_FAILURE;
     }
   if (cfg->crt_file == NULL)
     {
-      fprintf(stderr, "Missing required certificate file\n");
+      xlog(LOG_ERROR, "Missing required certificate file\n");
       return EXIT_FAILURE;
     }
   if (cfg->key_file == NULL)
     {
-      fprintf(stderr, "Missing required private key file\n");
+      xlog(LOG_ERROR, "Missing required private key file\n");
       return EXIT_FAILURE;
     }  
   if (cfg->port == NULL)

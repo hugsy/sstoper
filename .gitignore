@@ -2,3 +2,4 @@ libsstp.o
 sstpclient
 sstpclient.o
 *.o
+test/ssl_debug

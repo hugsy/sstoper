@@ -4,7 +4,7 @@
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
 #define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
-#define __CORRELATION_ID__ "{F7FC0718-C386-4D9A-B529-973927075AA7}"
+#define __CORRELATION_ID__ "{F7FC0718-C386-4D9A-B529-973927075AA8}"
 #define BUFFER_SIZE 1024
 
 
@@ -102,5 +102,5 @@ typedef struct __sstp_attribute_header
 void init_sstp(gnutls_session_t*);
 int is_control_packet(sstp_header_t*);
 void* xmalloc(size_t);
-void sstp_send(gnutls_session_t*, void*, uint16_t);
+void sstp_send(gnutls_session_t*, void*, size_t);
 void* sstp_recv(gnutls_session_t*);
