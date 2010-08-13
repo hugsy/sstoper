@@ -31,15 +31,15 @@ void xlog(int type, const char* fmt, ...)
     {
     case LOG_DEBUG:
     case LOG_INFO:
-      vfprintf(stdout, fmt, ap);
+      vfprintf(stdout, fmt, ap); fflush(stdout);
       break;
 
     case LOG_ERROR:
-      vfprintf(stderr, fmt, ap);
+      vfprintf(stderr, fmt, ap); fflush(stdout);
       break;
 
     default:
-      fprintf(stderr, "[ERROR] Unknown format\n");
+      fprintf(stderr, "[ERROR] Unknown format\n"); fflush(stderr);
       exit(1);
     }
   
@@ -241,7 +241,7 @@ void end_tls_session(gnutls_session_t* tls, sock_t sock, int reason)
 }
 
 
-void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
+void https_session_negociation(gnutls_session_t* tls, sstp_config* cfg)
 {
   ssize_t rbytes;
   char* buf;
@@ -303,14 +303,6 @@ void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
   if (strstr(buf, "HTTP/1.1 200") == NULL) 
     return;
 
-  if (cfg->verbose)
-    xlog(LOG_INFO, "Initiating SSTP negociation\n");
-
-  init_sstp(tls);
-
-  if (cfg->verbose)
-    xlog(LOG_INFO, "SSTP dialog end\n");
-
   free(buf);
 }
 
@@ -368,8 +360,7 @@ int main (int argc, char** argv)
       return EXIT_FAILURE;
     }
  
-  if (cfg->port == NULL)
-    cfg->port = "443";
+  if (cfg->port == NULL) cfg->port = "443";
 
   sockfd = init_tcp(cfg->server, cfg->port);
   
@@ -384,11 +375,18 @@ int main (int argc, char** argv)
       return EXIT_FAILURE;
     }
 
-  /* gnutls session itself goes here */
-  tls_session_loop(tls_session, cfg);
-  
+  /* http over ssl nego */
+  if (cfg->verbose) xlog(LOG_INFO, "Performing HTTPS transaction\n");
+  https_session_negociation(tls_session, cfg);
+
+  /* starting sstp */
+  if (cfg->verbose) xlog(LOG_INFO, "Initiating SSTP negociation\n");
+  initialize_sstp(tls_session);
+ 
   /* end gnutls session and free allocated memory */
+  if (cfg->verbose) xlog(LOG_INFO, "SSTP dialog end\n");
   end_tls_session(tls_session, sockfd, 0);
+  
   free((void*) cfg);
   
   return EXIT_SUCCESS;

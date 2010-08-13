@@ -35,20 +35,25 @@ void sstp_send(gnutls_session_t* tls, void* data, size_t len)
 }
 
 
-void sstp_recv(gnutls_session_t* tls) 
+void sstp_loop(gnutls_session_t* tls) 
 {
   int rbytes;
   char* buf;
-
+  int rbuf_max_size = gnutls_record_get_max_size(*tls);
+    
   while(1)
     {
       fd_set mselect;
-      
+      int retcode;      
+      struct timeval tv;
+
       FD_ZERO(&mselect);
       FD_SET(0, &mselect);
       FD_SET(sockfd, &mselect);
+
+      retcode = select(sockfd+1, &mselect, NULL, NULL, NULL);
       
-      if (select(sockfd+1, &mselect,NULL,NULL,NULL)==-1)
+      if ( retcode == -1 )
 	{
 	  perror("select");
 	  end_tls_session(tls, sockfd, 1);
@@ -96,7 +101,7 @@ void sstp_decode(char* recv_buf)
       switch (ctrl_hdr->message_type)
 	{
 	case SSTP_MSG_CALL_CONNECT_ACK:
-	  printf("acquitte\n"); break;
+	  printf("ACK\n"); break;
 	  
 	case SSTP_MSG_CALL_CONNECT_REQUEST:
 	case SSTP_MSG_CALL_CONNECT_NAK:
@@ -214,7 +219,7 @@ sstp_attribute_t* create_attribute(uint8_t attr_id, void* attr_data, size_t attr
 }
 
 
-void init_sstp(gnutls_session_t* tls)
+void initialize_sstp(gnutls_session_t* tls)
 {
   uint16_t attr_data;
   int attr_len;
@@ -234,6 +239,6 @@ void init_sstp(gnutls_session_t* tls)
   free(attribute);
 
   /* main loop */
-  sstp_recv(tls);
+  sstp_loop(tls);
 }
 

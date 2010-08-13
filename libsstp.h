@@ -105,11 +105,11 @@ typedef struct __sstp_attribute
 
 
 /* functions declarations  */
-void init_sstp(gnutls_session_t*);
+void initialize_sstp(gnutls_session_t*);
 int is_control_packet(sstp_header_t*);
 void* xmalloc(size_t);
 void sstp_send(gnutls_session_t*, void*, size_t);
-void sstp_recv(gnutls_session_t*);
+void sstp_loop(gnutls_session_t*);
 
 sstp_control_header_t* get_sstp_control_header(void* recv_buf);
 void sstp_decode(char* recv_buf);
