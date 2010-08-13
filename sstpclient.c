@@ -176,7 +176,8 @@ gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
   gnutls_init(tls, GNUTLS_CLIENT);
   
   /* setup x509 */
-  retcode = gnutls_priority_set_direct (*tls, "PERFORMANCE", &err);
+  retcode = gnutls_priority_set_direct (*tls, "NORMAL:-VERS-TLS1.1", &err);
+  /* retcode = gnutls_priority_set_direct (*tls, "SECURE256", &err); */
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
@@ -195,15 +196,16 @@ gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
     }
 
   /* setting ca trust list */
-  retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
+  retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file,
+						    GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
       xlog(LOG_ERROR, "init_tls_session:At least 1 certificate must be valid.\n");
       gnutls_perror(retcode);
       return NULL;
-    }
+      }
 
-  /* setting client private key */
+  /* setting client private key*/
   retcode = gnutls_certificate_set_x509_key_file (creds,
 						  cfg->crt_file,
 						  cfg->key_file,
@@ -213,7 +215,7 @@ gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
       xlog(LOG_ERROR, "init_tls_session:gnutls_certificate_set_x509_key_file\n");
       gnutls_perror(retcode);
       return NULL;
-    }  
+      }  
 
   /* applying settings to session */
   retcode = gnutls_credentials_set (*tls, GNUTLS_CRD_CERTIFICATE, creds);
@@ -261,12 +263,14 @@ void tls_session_loop(gnutls_session_t* tls, sstp_config* cfg)
   rbytes = -1;
   buf = (char*) xmalloc(BUFFER_SIZE * sizeof(char));
 
-  /* SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 */
-  /* SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7} */
-  /* Content-Length: 18446744073709551615 */
-  /* Host: vpn.coyote.looney */
-  /* "ClientByPassHLAuth: True\r\n" */
-  /* "ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592\r\n" */
+  /*
+    SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 
+    SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7}
+    Content-Length: 18446744073709551615
+    Host: vpn.coyote.looney
+    ClientByPassHLAuth: True
+    ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592
+  */
     
   snprintf(buf, BUFFER_SIZE-1,
 	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"

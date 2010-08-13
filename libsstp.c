@@ -3,9 +3,12 @@
 #include <gnutls/gnutls.h>
 #include <string.h>
 #include <stdio.h>
-#include "libsstp.h"
 #include <stdlib.h>
 #include <arpa/inet.h>
+#include <unistd.h>
+
+#include "libsstp.h"
+
 
 int is_control_packet(sstp_header_t* pkt_hdr)
 {
@@ -134,8 +137,8 @@ void init_sstp(gnutls_session_t* tls)
   send_sstp_control_packet(tls, SSTP_MSG_CALL_CONNECT_REQUEST, data, sstp_attr_len);
 
   free(data);
-  
+
   data = sstp_recv(tls);
-  free(data);
+  free(data);  
 }
 

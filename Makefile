@@ -7,7 +7,11 @@ INC	= -L.
 LIB	= -lgnutls
 INC	= 
 TEST	= test
-PARAMS  = -s vpn.coyote.looney -t $(TEST)/x509-trust.pem -c $(TEST)/x509-client.pem -k $(TEST)/x509-client-key.pem
+
+PARAMS  = -s vpn.coyote.looney \
+	-t $(TEST)/vpn.coyote.looney.crt \
+	-c $(TEST)/x509-client.pem \
+	-k $(TEST)/x509-client-key.pem
 
 all: sstpclient
 
