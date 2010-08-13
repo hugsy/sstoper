@@ -1,10 +1,11 @@
 #include <stdint.h>
 
 /* SSTP Properties */
+#define SSTP_VERSION 0x10
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
 #define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
-#define __CORRELATION_ID__ "{F7FC0718-C386-4D9A-B529-973827075AA7}"
+#define SSTP_CORRELATION_ID  "{F7FC0718-C386-4D9A-B529-973827075AA7}"
 #define BUFFER_SIZE 1024
 
 
@@ -24,7 +25,7 @@ enum sstp_encapsulated_protocol_types
 
 
 /* SSTP Status Message */
-enum status_messages 
+enum control_messages_types
   {
     SSTP_MSG_CALL_CONNECT_REQUEST = 0x0001,
     SSTP_MSG_CALL_CONNECT_ACK = 0x0002,
@@ -96,6 +97,11 @@ typedef struct __sstp_attribute_header
   uint16_t packet_length;
 } sstp_attribute_header_t; 
 
+typedef struct __sstp_attribute
+{
+  uint16_t length;
+  void *data;
+} sstp_attribute_t;
 
 
 /* functions declarations  */
@@ -103,4 +109,7 @@ void init_sstp(gnutls_session_t*);
 int is_control_packet(sstp_header_t*);
 void* xmalloc(size_t);
 void sstp_send(gnutls_session_t*, void*, size_t);
-void* sstp_recv(gnutls_session_t*);
+void sstp_recv(gnutls_session_t*);
+
+sstp_control_header_t* get_sstp_control_header(void* recv_buf);
+void sstp_decode(char* recv_buf);

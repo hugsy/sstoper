@@ -6,8 +6,12 @@
 #include <stdlib.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/select.h>        /* According to POSIX.1-2001 */
 
 #include "libsstp.h"
+
+
+extern int sockfd;
 
 
 int is_control_packet(sstp_header_t* pkt_hdr)
@@ -21,38 +25,101 @@ void sstp_send(gnutls_session_t* tls, void* data, size_t len)
   
   sbytes = -1;
   sbytes = gnutls_record_send (*tls, data, len);
-  printf("--> %lu bytes\n", len);
+  printf(" --> %lu bytes\n", len);
   
   if (sbytes < 0) 
     {
       gnutls_perror(sbytes);
       exit(1);
     }
-  
 }
 
-void* sstp_recv(gnutls_session_t* tls) 
+
+void sstp_recv(gnutls_session_t* tls) 
 {
   int rbytes;
   char* buf;
-  size_t rbuf_size;
 
-  rbytes = -1;
-  rbuf_size = BUFFER_SIZE;
-  buf = (char*) xmalloc(rbuf_size);
-  
-  rbytes = gnutls_record_recv (*tls, buf, rbuf_size-1);
-  printf("<-- %d bytes\n", rbytes);
-  
-  if (rbytes < 0)
+  while(1)
     {
-      gnutls_perror(rbytes);
-      free(buf);
-      exit(1);
+      fd_set mselect;
+      
+      FD_ZERO(&mselect);
+      FD_SET(0, &mselect);
+      FD_SET(sockfd, &mselect);
+      
+      if (select(sockfd+1, &mselect,NULL,NULL,NULL)==-1)
+	{
+	  perror("select");
+	  end_tls_session(tls, sockfd, 1);
+	  exit(1);
+	}
+    
+      if (FD_ISSET(0,&mselect)) break;
+      if (FD_ISSET(sockfd,&mselect))
+	{
+	  rbytes = gnutls_record_check_pending(*tls);
+	  if (rbytes == 0) break;
+	  
+	  printf("<--  %d bytes\n", rbytes);
+	  
+	  buf = (char*) xmalloc(rbytes);
+	  rbytes = gnutls_record_recv (*tls, buf, rbytes);
+	  
+	  if (rbytes < 0)
+	    {
+	      gnutls_perror(rbytes);
+	      free(buf);
+	      exit(1);
+	    }
+
+	  sstp_decode(buf);
+	}
     }
   
-  return buf;
 }
+
+
+void sstp_decode(char* recv_buf)
+{
+  sstp_header_t* sstp_hdr;
+  
+  if (!valid_header(recv_buf)) return;
+
+  sstp_hdr = (sstp_header_t*) recv_buf;
+
+  if (is_control_packet(sstp_hdr)) 
+    {
+      sstp_control_header_t* ctrl_hdr;
+      ctrl_hdr = get_sstp_control_header(recv_buf + sizeof(sstp_header_t));
+      
+      switch (ctrl_hdr->message_type)
+	{
+	case SSTP_MSG_CALL_CONNECT_ACK:
+	  printf("acquitte\n"); break;
+	  
+	case SSTP_MSG_CALL_CONNECT_REQUEST:
+	case SSTP_MSG_CALL_CONNECT_NAK:
+	case SSTP_MSG_CALL_ABORT:
+	case SSTP_MSG_CALL_DISCONNECT:
+	case SSTP_MSG_CALL_DISCONNECT_ACK:
+	default :
+	  printf("%x\n", ctrl_hdr->message_type);
+	}
+
+      free(ctrl_hdr);
+    }
+}
+
+
+int valid_header(void* recv_buf)
+{
+  sstp_header_t* header = (sstp_header_t*) recv_buf;
+  
+  return (header->version == 0x10) && \
+    (header->reserved == 0x00 || header->reserved == 0x01);
+}
+
 
 void send_sstp_packet(gnutls_session_t* tls, int type, void* data, size_t len)
 {
@@ -63,14 +130,10 @@ void send_sstp_packet(gnutls_session_t* tls, int type, void* data, size_t len)
 
   memset(&pkt_hdr, 0, sstp_hdr_len);
   
-  pkt_hdr.version = 0x10;
+  pkt_hdr.version = SSTP_VERSION;
   pkt_hdr.reserved = type;
   pkt_hdr.length = htons(total_length); 
-
-#ifdef _DEBUG_ON
-  printf("header:%lu data:%lu total:%lu\n", sstp_hdr_len , len, total_length);
-#endif
-  
+ 
   pkt = xmalloc(total_length);
   
   memcpy(pkt, &pkt_hdr, sstp_hdr_len);
@@ -85,6 +148,18 @@ void send_sstp_packet(gnutls_session_t* tls, int type, void* data, size_t len)
 void send_sstp_data_packet(gnutls_session_t* tls, void* data, size_t len) 
 {
   send_sstp_packet(tls, SSTP_DATA_PACKET, data, len); 
+}
+
+
+sstp_control_header_t* get_sstp_control_header(void* recv_buf)
+{
+  sstp_control_header_t* ctrl_hdr; 
+
+  ctrl_hdr = xmalloc(sizeof(sstp_control_header_t));
+  ctrl_hdr->message_type = ntohs( *((uint16_t*)recv_buf) );
+  ctrl_hdr->num_attributes  = ntohs( *((uint16_t*)recv_buf+sizeof(uint16_t)) );
+
+  return ctrl_hdr;
 }
 
 
@@ -114,31 +189,51 @@ void send_sstp_control_packet(gnutls_session_t* tls, uint8_t msg_type,
 }
 
 
-void init_sstp(gnutls_session_t* tls)
+sstp_attribute_t* create_attribute(uint8_t attr_id, void* attr_data, size_t attr_data_len)
 {
   sstp_attribute_header_t attr_hdr;
-  uint16_t attr_data;
-  size_t sstp_attr_hdr_len, sstp_attr_len;
+  size_t sstp_attr_hdr_len;
+  sstp_attribute_t* attr;
   void* data;
   
+  if (!attr_data) return NULL;
+
   sstp_attr_hdr_len = sizeof(sstp_attribute_header_t);
-  sstp_attr_len = sstp_attr_hdr_len + sizeof(uint16_t);
+  attr = xmalloc(sizeof(sstp_attribute_t));
+  attr->length = sstp_attr_hdr_len + attr_data_len;
+  attr->data = xmalloc(attr->length);
   
-  data = xmalloc(sstp_attr_hdr_len);
-  
-  attr_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
   attr_hdr.reserved = 0;
-  attr_hdr.attribute_id = SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID;
-  attr_hdr.packet_length = htons(sstp_attr_len);
+  attr_hdr.attribute_id = attr_id;
+  attr_hdr.packet_length = htons(attr->length);
   
-  memcpy(data, &attr_hdr, sstp_attr_hdr_len);
-  memcpy(data + sstp_attr_hdr_len, &attr_data, sizeof(uint16_t));
+  memcpy(attr->data, &attr_hdr, sstp_attr_hdr_len);
+  memcpy(attr->data + sstp_attr_hdr_len, attr_data, attr_data_len);
+  
+  return attr;
+}
 
-  send_sstp_control_packet(tls, SSTP_MSG_CALL_CONNECT_REQUEST, data, sstp_attr_len);
 
-  free(data);
+void init_sstp(gnutls_session_t* tls)
+{
+  uint16_t attr_data;
+  int attr_len;
+  sstp_attribute_t* attribute;
 
-  data = sstp_recv(tls);
-  free(data);  
+  attribute = NULL;
+  attr_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
+  
+  attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
+			      &attr_data,
+			      sizeof(uint16_t));
+
+  send_sstp_control_packet(tls, SSTP_MSG_CALL_CONNECT_REQUEST,
+			   attribute->data, attribute->length);
+
+  free(attribute->data);
+  free(attribute);
+
+  /* main loop */
+  sstp_recv(tls);
 }
 
