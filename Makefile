@@ -1,6 +1,5 @@
 CC	= gcc
-CFLAGS 	= -Werror 
-CFLAGS 	+= $(DBGFLAGS)
+CFLAGS 	= -Werror -O4
 DBGFLAGS= -D_DEBUG_ON -ggdb
 RM	= rm -fr
 INC	= -L.
@@ -8,10 +7,10 @@ LIB	= -lgnutls
 INC	= 
 TEST	= test
 
-PARAMS  = -s vpn.coyote.looney \
-	-t $(TEST)/vpn.coyote.looney.crt \
-	-c $(TEST)/x509-client.pem \
-	-k $(TEST)/x509-client-key.pem
+PARAMS  = -s vpn.coyote.looney -c $(TEST)/vpn.coyote.looney.crt
+
+.c.o : 
+	$(CC) $(CFLAGS) $(DBGFLAGS) $(INC) -c $^
 
 all: sstpclient
 
@@ -26,6 +25,9 @@ valgrind : sstpclient
 
 efence : sstpclient
 	/usr/bin/ef $< $(PARAMS)
+
+dbg : sstpclient.o libsstp.o
+	$(CC) $(CFLAGS) $(DBGFLAGS) $(INC) $(LIB) -o sstpclient $^
 
 server :
 	gnutls-serv --http \

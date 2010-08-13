@@ -1,7 +1,0 @@
-ssl_init keys string:
-0.0.0.0,443,sstp,/home/hugsy/code/sstpclient/test/server-key.pem
-ssl_init found host entry 0.0.0.0,443,sstp,/home/hugsy/code/sstpclient/test/server-key.pem
-ssl_init addr '0.0.0.0' port '443' filename '/home/hugsy/code/sstpclient/test/server-key.pem' password(only for p12 file) '(null)'
-Private key imported: KeyID 20:fb:7b:78:99:09:05:4d:f2:df:49:d2:55:5d:a9:66:...
-ssl_init private key file /home/hugsy/code/sstpclient/test/server-key.pem successfully loaded
-association_add TCP port 443 protocol sstp handle 0x1fe7ee0

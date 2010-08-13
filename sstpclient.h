@@ -34,12 +34,8 @@ typedef struct
 
 /* functions declaration */
 void xlog(int, const char*, ...);
-sock_t init_tcp(char*, char*);
-gnutls_session_t* init_tls_session(sock_t, sstp_config*);
-void tls_session_loop(gnutls_session_t*, sstp_config*);
 void end_tls_session(gnutls_session_t*, sock_t, int);
-void usage(char*, FILE*, int);
-void parse_options (sstp_config*, int, char**);
+
 
 /* compat ansi */
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
