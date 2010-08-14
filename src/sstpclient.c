@@ -7,12 +7,12 @@
 #include <getopt.h>
 #include <netdb.h>
 #include <string.h>
-#include <gnutls/gnutls.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <inttypes.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <gnutls/gnutls.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 #include "sstpclient.h"
 #include "libsstp.h"
@@ -69,11 +69,11 @@ void usage(char* name, FILE* fd, int retcode)
   fprintf(fd,
 	  "SSTPClient: SSTP VPN client for *nix\n"
 	  "Usage: %s [ARGUMENTS]\n"
-	  "\t-s, --server <sstp.server.address> (mandatory)\t\tSSTP Server\n"
-	  "\t-c, --ca-file /path/to/ca_file (mandatory)\t\tTrusted CA file\n"
-	  "\t-p, --port NUM \t\tAlternative server port (default: 443)\n"
-	  "\t-v, --verbose\t\tVerbose mode\n"
-	  "\t-h, --help\t\tHelp menu (this one!)\n",
+	  "\t-s, --server <sstp.server.address> (mandatory)\tSSTP Server\n"
+	  "\t-c, --ca-file /path/to/ca_file (mandatory)\tTrusted CA file\n"
+	  "\t-p, --port NUM \tAlternative server port (default: 443)\n"
+	  "\t-v, --verbose\tVerbose mode\n"
+	  "\t-h, --help\tHelp menu (this one!)\n",
 	  name);
   
   exit(retcode);

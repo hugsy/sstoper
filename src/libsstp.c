@@ -1,11 +1,11 @@
 #define _POSIX_SOURCE 1
 
-#include <gnutls/gnutls.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <arpa/inet.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <gnutls/gnutls.h>
 #include <sys/select.h>        /* According to POSIX.1-2001 */
 
 #include "libsstp.h"
