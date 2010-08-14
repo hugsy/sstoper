@@ -17,9 +17,11 @@
 #include "sstpclient.h"
 #include "libsstp.h"
 
+
 gnutls_session_t* tls_session;
 sock_t sockfd;
 sstp_config *cfg;
+
 
 void xlog(int type, const char* fmt, ...) 
 {
@@ -64,10 +66,19 @@ void* xmalloc(size_t size)
 
 void usage(char* name, FILE* fd, int retcode)
 {
-  fprintf(fd,"Usage:\n");
-  fprintf(fd, "%s -s server\n", name);
+  fprintf(fd,
+	  "SSTPClient: SSTP VPN client for *nix\n"
+	  "Usage: %s [ARGUMENTS]\n"
+	  "\t-s, --server <sstp.server.address> (mandatory)\t\tSSTP Server\n"
+	  "\t-c, --ca-file /path/to/ca_file (mandatory)\t\tTrusted CA file\n"
+	  "\t-p, --port NUM \t\tAlternative server port (default: 443)\n"
+	  "\t-v, --verbose\t\tVerbose mode\n"
+	  "\t-h, --help\t\tHelp menu (this one!)\n",
+	  name);
+  
   exit(retcode);
 }
+
 
 
 void parse_options (sstp_config* cfg, int argc, char** argv)
@@ -274,7 +285,8 @@ void https_session_negociation(gnutls_session_t* tls, sstp_config* cfg)
   
 #ifdef _DEBUG_ON
   xlog(LOG_DEBUG, "Sending: %s\n", buf);
-#endif 
+#endif
+  
   gnutls_record_send (*tls, buf, strlen(buf)); 
   xlog(LOG_INFO, "--> %lu bytes\n", strlen(buf));
   
@@ -284,9 +296,10 @@ void https_session_negociation(gnutls_session_t* tls, sstp_config* cfg)
   if (rbytes > 1)
     {
       xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
-#ifdef _DEBUG_ON      
+      
+#ifdef _DEBUG_ON
       xlog(LOG_DEBUG , "Received: %s\n", buf);
-#endif       
+#endif
     }
   else if (rbytes == 0)
     {
@@ -326,7 +339,7 @@ int main (int argc, char** argv)
   struct sigaction saction;
   
   /* SIGTERM and SIGINT close the connection properly */
-  /* set signal bitmask*/
+  /* set signal bitmask */
   sigemptyset(&sigset);
   sigfillset(&sigset);
   sigdelset(&sigset, SIGTERM);
@@ -362,10 +375,10 @@ int main (int argc, char** argv)
  
   if (cfg->port == NULL) cfg->port = "443";
 
+  /* create socket  */
   sockfd = init_tcp(cfg->server, cfg->port);
   
-  if (sockfd < 0)
-    return EXIT_FAILURE;
+  if (sockfd < 0) return EXIT_FAILURE;
 
   /* allocate and start gnutls session */
   tls_session = init_tls_session(sockfd, cfg); 

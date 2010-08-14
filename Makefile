@@ -1,6 +1,6 @@
 CC	= gcc
 CFLAGS 	= -Werror -O4
-DBGFLAGS= -D_DEBUG_ON -ggdb
+# DBGFLAGS= -D_DEBUG_ON -ggdb
 RM	= rm -fr
 INC	= -L.
 LIB	= -lgnutls
