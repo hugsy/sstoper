@@ -18,11 +18,6 @@
 #include "libsstp.h"
 
 
-gnutls_session_t* tls_session;
-sock_t sockfd;
-sstp_config *cfg;
-
-
 void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;
@@ -33,11 +28,8 @@ void xlog(int type, const char* fmt, ...)
     {
     case LOG_DEBUG:
     case LOG_INFO:
-      vfprintf(stdout, fmt, ap); fflush(stdout);
-      break;
-
     case LOG_ERROR:
-      vfprintf(stderr, fmt, ap); fflush(stdout);
+      vfprintf(stderr, fmt, ap); fflush(stderr);
       break;
 
     default:
@@ -51,7 +43,9 @@ void xlog(int type, const char* fmt, ...)
 
 void* xmalloc(size_t size)
 {
-  void *ptr = malloc(size);
+  void *ptr;
+
+  ptr = malloc(size);
   
   if ( ptr == NULL )
     {
@@ -64,8 +58,13 @@ void* xmalloc(size_t size)
 }
 
 
-void usage(char* name, FILE* fd, int retcode)
+void usage(char* name, int retcode)
 {
+  FILE* fd;
+  
+  if (retcode == 0) fd = stdout;
+  else fd = stderr;
+      
   fprintf(fd,
 	  "SSTPClient: SSTP VPN client for *nix\n"
 	  "Usage: %s [ARGUMENTS]\n"
@@ -78,7 +77,6 @@ void usage(char* name, FILE* fd, int retcode)
   
   exit(retcode);
 }
-
 
 
 void parse_options (sstp_config* cfg, int argc, char** argv)
@@ -106,14 +104,14 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       
       switch (curopt)
 	{
-	case 'h': usage (argv[0], stdout, 0);
-	case 'v': cfg->verbose = 1; break;
+	case 'h': usage (argv[0], EXIT_SUCCESS);
+	case 'v': cfg->verbose++; break;
 	case 's': cfg->server = optarg; break;
 	case 'p': cfg->port = optarg; break;
 	case 'c': cfg->ca_file = optarg; break;  
 	case '?':
 	default:
-	  usage (argv[0], stderr, 1);
+	  usage (argv[0], EXIT_FAILURE);
 	}
       curopt_idx = 0;
     }
@@ -170,7 +168,7 @@ sock_t init_tcp(char* hostname, char* port)
 }
 
 
-gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
+gnutls_session_t* init_tls_session(sock_t sock)
 {
   int retcode;
   const char* err;
@@ -181,6 +179,15 @@ gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
   tls = (gnutls_session_t*) xmalloc(sizeof(gnutls_session_t));
   gnutls_global_init();
   gnutls_init(tls, GNUTLS_CLIENT);
+
+  /* exp. */
+  retcode = gnutls_record_set_max_size(*tls, SSTP_MAX_BUFFER_SIZE);
+  
+  if (retcode != GNUTLS_E_SUCCESS)
+    {
+      gnutls_perror(retcode);
+      return NULL;
+    }
   
   /* setup x509 */
   retcode = gnutls_priority_set_direct (*tls, "SECURE256", &err);
@@ -233,7 +240,7 @@ gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
     {
       xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n");
       gnutls_perror (retcode);
-      end_tls_session(tls, sockfd, retcode);
+      end_tls_session(retcode);
       return NULL;
     }
   
@@ -241,82 +248,14 @@ gnutls_session_t* init_tls_session(sock_t sock, sstp_config* cfg)
 }
 
 
-void end_tls_session(gnutls_session_t* tls, sock_t sock, int reason)
+void end_tls_session(int reason)
 {
   gnutls_bye(*tls, GNUTLS_SHUT_RDWR);
-  shutdown(sock, SHUT_RDWR);
-  close(sock);
+  shutdown(sockfd, SHUT_RDWR);
+  close(sockfd);
   gnutls_deinit(*tls);
   gnutls_global_deinit();
   free((void*) tls);
-}
-
-
-void https_session_negociation(gnutls_session_t* tls, sstp_config* cfg)
-{
-  ssize_t rbytes;
-  char* buf;
-  size_t recv_size;
-  
-  rbytes = -1;
-  recv_size = gnutls_record_get_max_size(*tls);
-  buf = (char*) xmalloc(recv_size);
-
-  /*
-    SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 
-    SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7}
-    Content-Length: 18446744073709551615
-    Host: vpn.coyote.looney
-    ClientByPassHLAuth: True\r\n
-    ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592\r\n
-    SSTPVERSION: 1.0
-  */
-  
-  snprintf(buf, recv_size,
-	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
-	   "SSTPCORRELATIONID: %s\r\n"
-	   "Content-Length: %llu\r\n"	   
-	   "Host: %s\r\n"
-	   "\r\n",
-	   SSTP_CORRELATION_ID,
-	   __UNSIGNED_LONG_LONG_MAX__,
-	   cfg->server);
-
-  
-#ifdef _DEBUG_ON
-  xlog(LOG_DEBUG, "Sending: %s\n", buf);
-#endif
-  
-  gnutls_record_send (*tls, buf, strlen(buf)); 
-  xlog(LOG_INFO, "--> %lu bytes\n", strlen(buf));
-  
-  memset(buf, 0, BUFFER_SIZE);
-  rbytes = gnutls_record_recv (*tls, buf, BUFFER_SIZE-1);
-      
-  if (rbytes > 1)
-    {
-      xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
-      
-#ifdef _DEBUG_ON
-      xlog(LOG_DEBUG , "Received: %s\n", buf);
-#endif
-    }
-  else if (rbytes == 0)
-    {
-      xlog(LOG_INFO , "!! Connection has been closed !!\n");
-      return;
-    }
-  else 
-    {
-      xlog(LOG_ERROR, "A problem has occured.\n");
-      gnutls_perror(rbytes);
-      return;
-    }
-
-  if (strstr(buf, "HTTP/1.1 200") == NULL) 
-    return;
-
-  free(buf);
 }
 
 
@@ -324,6 +263,10 @@ void sighandle(int signum)
 {
   switch(signum) 
     {
+    case SIGALRM:
+      xlog(LOG_INFO, "Nego timer ends\n");
+      break;
+      
     case SIGINT:
     case SIGTERM:
       xlog(LOG_INFO, "SIG: Closing connection\n");
@@ -344,6 +287,7 @@ int main (int argc, char** argv)
   sigfillset(&sigset);
   sigdelset(&sigset, SIGTERM);
   sigdelset(&sigset, SIGINT);
+  sigdelset(&sigset, SIGALRM);  
   sigprocmask(SIG_SETMASK, &sigset, NULL);
 
   /* set sigaction */
@@ -354,6 +298,7 @@ int main (int argc, char** argv)
   /* apply action to signal in bitmask */
   sigaction(SIGINT, &saction, NULL);
   sigaction(SIGTERM, &saction, NULL);
+  sigaction(SIGALRM, &saction, NULL);
 
   /* configuration parsing */
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
@@ -364,13 +309,13 @@ int main (int argc, char** argv)
 
   if (cfg->server == NULL)
     {
-      xlog(LOG_ERROR, "Missing required arg server\n");
-      return EXIT_FAILURE;
+      xlog(LOG_ERROR, "Missing required server argument\n");
+      usage(argv[0], EXIT_FAILURE);
     }
   if (cfg->ca_file == NULL)
     {
       xlog(LOG_ERROR, "Missing required trusted CA file\n");
-      return EXIT_FAILURE;
+      usage(argv[0], EXIT_FAILURE);
     }
  
   if (cfg->port == NULL) cfg->port = "443";
@@ -381,8 +326,8 @@ int main (int argc, char** argv)
   if (sockfd < 0) return EXIT_FAILURE;
 
   /* allocate and start gnutls session */
-  tls_session = init_tls_session(sockfd, cfg); 
-  if (tls_session == NULL)
+  tls = init_tls_session(sockfd); 
+  if (tls == NULL)
     {
       xlog(LOG_ERROR, "Failed to initialize TLS session, leaving.\n");
       return EXIT_FAILURE;
@@ -390,15 +335,17 @@ int main (int argc, char** argv)
 
   /* http over ssl nego */
   if (cfg->verbose) xlog(LOG_INFO, "Performing HTTPS transaction\n");
-  https_session_negociation(tls_session, cfg);
+  if (https_session_negociation() < 0)
+    goto end;
 
   /* starting sstp */
   if (cfg->verbose) xlog(LOG_INFO, "Initiating SSTP negociation\n");
-  initialize_sstp(tls_session);
- 
+  sstp_loop();
+
+ end:  
   /* end gnutls session and free allocated memory */
   if (cfg->verbose) xlog(LOG_INFO, "SSTP dialog end\n");
-  end_tls_session(tls_session, sockfd, 0);
+  end_tls_session(EXIT_SUCCESS);
   
   free((void*) cfg);
   

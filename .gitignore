@@ -13,3 +13,4 @@ autom4te.cache
 autom4te.cache/*
 *stamp-h1*
 *.dirstamp*
+src/Makefile

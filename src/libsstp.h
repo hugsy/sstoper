@@ -1,12 +1,15 @@
 #include <stdint.h>
+#include <sys/time.h>
 
+/* System properties */
+#define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
+   
 /* SSTP Properties */
 #define SSTP_VERSION 0x10
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
-#define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
-#define SSTP_CORRELATION_ID  "{F7FC0718-C386-4D9A-B529-973827075AA7}"
-#define BUFFER_SIZE 1024
+#define SSTP_NEGOCIATION_TIMER 5
+#define SSTP_MAX_BUFFER_SIZE 1024
 
 
 /* SSTP Packet Type */
@@ -75,6 +78,15 @@ enum attr_status
     ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG = 0x0000000b
   };
 
+/* sstp client context */
+enum 
+  {
+    CLIENT_CALL_DISCONNECTED,
+    CLIENT_CONNECT_REQUEST_SENT,
+    CLIENT_CONNECT_ACK_RECEIVED,
+    CLIENT_CALL_CONNECTED    
+  };
+
 
 /* data structures */
 typedef struct __sstp_header
@@ -97,19 +109,56 @@ typedef struct __sstp_attribute_header
   uint16_t packet_length;
 } sstp_attribute_header_t; 
 
+/* attribute structures */
 typedef struct __sstp_attribute
 {
   uint16_t length;
   void *data;
 } sstp_attribute_t;
 
+/* uint24_t n'existe pas */
+/* uint24_t reserved1; */
+
+typedef struct __sstp_attribute_crypto_bind_req
+{
+  uint32_t hash_bitmask; /* 0-er les 3 octets de poids fort */
+  uint32_t nonce[4];
+} sstp_attribute_crypto_bind_req_t;
+
+typedef struct __sstp_attribute_status_info
+{
+  uint32_t attrib_id; /* 0-er les 3 octets de poids fort */
+  uint32_t status;
+} sstp_attribute_status_info_t;
+
+
+/* sstp client context */
+typedef struct __sstp_context 
+{
+  unsigned char state;
+  unsigned char retry;
+  struct timeval negociation_timer;
+  unsigned char hash_algorithm;
+  uint32_t nonce[4];  
+} sstp_context_t;
+
+sstp_context_t* ctx;
+
 
 /* functions declarations  */
-void initialize_sstp(gnutls_session_t*);
-int is_control_packet(sstp_header_t*);
-void* xmalloc(size_t);
-void sstp_send(gnutls_session_t*, void*, size_t);
-void sstp_loop(gnutls_session_t*);
+int https_session_negociation();
 
-sstp_control_header_t* get_sstp_control_header(void* recv_buf);
-void sstp_decode(char* recv_buf);
+void initialize_sstp();
+void sstp_loop();
+void sstp_send(void*, size_t);
+void send_sstp_data_packet(void*, size_t);
+
+int sstp_decode(void*, ssize_t);
+int sstp_decode_attributes(uint16_t, void*, ssize_t);
+
+int is_valid_header(void*, ssize_t);
+int is_control_packet(sstp_header_t*);
+  
+int set_crypto_binding(void*);
+int get_status_info(void*,uint16_t);
+

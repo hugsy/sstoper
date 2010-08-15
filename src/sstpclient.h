@@ -32,9 +32,15 @@ typedef struct
 } sstp_config;
 
 
+gnutls_session_t* tls;
+sock_t sockfd;
+sstp_config *cfg;
+
+
 /* functions declaration */
+void* xmalloc(size_t);
 void xlog(int, const char*, ...);
-void end_tls_session(gnutls_session_t*, sock_t, int);
+void end_tls_session(int);
 
 
 /* compat ansi */
