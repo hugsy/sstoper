@@ -250,9 +250,26 @@ gnutls_session_t* init_tls_session(sock_t sock)
 
 void end_tls_session(int reason)
 {
-  gnutls_bye(*tls, GNUTLS_SHUT_RDWR);
-  shutdown(sockfd, SHUT_RDWR);
-  close(sockfd);
+  int retcode;
+
+  if (cfg->verbose)
+    xlog(LOG_INFO, "End of TLS connection. Reason: %d.\n", reason);
+  
+  retcode = gnutls_bye(*tls, GNUTLS_SHUT_RDWR);
+  if (retcode != GNUTLS_E_SUCCESS)
+    xlog(LOG_ERROR, "end_tls_session: %s", gnutls_strerror(retcode));
+  
+  retcode = shutdown(sockfd, SHUT_RDWR);
+  if (retcode < -1)
+    xlog(LOG_ERROR, "end_tls_session: %s", strerror(retcode));
+  
+  retcode = close(sockfd);
+  if (retcode < -1)
+    xlog(LOG_ERROR, "end_tls_session: %s", strerror(retcode));
+
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Freeing regions.\n");
+  
   gnutls_deinit(*tls);
   gnutls_global_deinit();
   free((void*) tls);
@@ -271,6 +288,7 @@ void sighandle(int signum)
     case SIGTERM:
       xlog(LOG_INFO, "SIG: Closing connection\n");
       fflush(stdout);
+      end_tls_session(SIGINT);
       exit(signum);
     }
 }

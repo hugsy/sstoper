@@ -64,7 +64,6 @@ int https_session_negociation()
   buf = (char*) xmalloc(recv_size);
   generate_guid(guid);
   
-  
   /*
     SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 
     SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7}
@@ -119,8 +118,7 @@ int https_session_negociation()
 void sstp_send(void* data, size_t len)
 {
   ssize_t sbytes;
-  
-  sbytes = -1;
+
   sbytes = gnutls_record_send (*tls, data, len);
   
   if (sbytes < 0)
@@ -129,9 +127,8 @@ void sstp_send(void* data, size_t len)
       exit(sbytes);
     }
 
-  if (cfg->verbose)
-    xlog(LOG_INFO, " --> %lu %s bytes\n", sbytes,
-	 is_control_packet((sstp_header_t*)data)?"control":"data");
+  xlog(LOG_INFO, " --> %lu %s bytes\n", sbytes,
+       is_control_packet((sstp_header_t*)data)?"control":"data");
   
 }
 
@@ -161,8 +158,8 @@ void sstp_loop()
       if ( retcode == -1 )
 	{
 	  xlog(LOG_ERROR, "sstp_loop: select failed: %s\n", strerror(errno));
-	  end_tls_session(EXIT_FAILURE);
-	  exit(EXIT_FAILURE);
+	  ctx->state = CLIENT_CALL_DISCONNECTED;
+	  break;
 	}
 
       if (FD_ISSET(0, &msrd)) 
@@ -264,11 +261,7 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
 	  retcode = sstp_fork();
 	  if (retcode < 0) return -1;
 	  break;
-	  
-	case SSTP_MSG_CALL_CONNECT_REQUEST:
-	  xlog(LOG_ERROR, "Client cannot receive SSTP_MSG_CALL_CONNECT_REQUEST\n");
-	  return -1;
-	  
+	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
 	  xlog(LOG_ERROR, "Server refused connection\n");
 	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
@@ -294,15 +287,21 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
 	case SSTP_MSG_CALL_DISCONNECT:
 	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
 	  if (retcode < 0) return -1;
+
+	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT_ACK, NULL, 0, 0);
+	  ctx->state = CLIENT_CALL_DISCONNECTED;
 	  break;
 	  
+	  
+	  /*
+	   * Client SHOULD NEVER receive teh following message.
+	   * If so, close (dirtiliy) the client.
+	   */
+	case SSTP_MSG_CALL_CONNECT_REQUEST:
 	case SSTP_MSG_CALL_DISCONNECT_ACK:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
-	  if (retcode < 0) return -1;
-	  break;
-	  
 	default :
-	  xlog(LOG_ERROR, "Unhandled type %#x\n", ctrl_type);
+	  xlog(LOG_ERROR, "Client cannot unhandle type %#x\n", ctrl_type);
+	  ctx->state = CLIENT_CALL_DISCONNECTED;
 	  return -1;	  
 	}
       
@@ -431,24 +430,32 @@ void send_sstp_data_packet(void* data, size_t len)
 }
 
 
-void send_sstp_control_packet(uint8_t msg_type, sstp_attribute_header_t* attrs, size_t len)
+void send_sstp_control_packet(uint8_t msg_type, sstp_attribute_header_t* attrs,
+			      uint16_t attrs_num, size_t attrs_len)
 {
   sstp_control_header_t ctrl_hdr;
   size_t ctrl_hdr_len;
   size_t ctrl_len;
   void* data;
 
+  if (attrs == NULL && attrs_num != 0)
+    {
+      xlog(LOG_ERROR, "No attribute specified. Cannot send message.\n");
+      return;
+    } 
+  
   ctrl_hdr_len = sizeof(sstp_control_header_t);
-  ctrl_len = ctrl_hdr_len + len;
+  ctrl_len = ctrl_hdr_len + attrs_len;
   
   memset(&ctrl_hdr, 0, sizeof(sstp_control_header_t));
   
   ctrl_hdr.message_type = htons(msg_type);
-  ctrl_hdr.num_attributes = htons(0x0001);
+  ctrl_hdr.num_attributes = htons(attrs_num);
   
   data = xmalloc(ctrl_len);
   memcpy(data, &ctrl_hdr, ctrl_hdr_len);
-  memcpy(data + ctrl_hdr_len, attrs, len);
+  if (attrs_num)
+    memcpy(data + ctrl_hdr_len, attrs, attrs_len);
 
   send_sstp_packet(SSTP_CONTROL_PACKET, data, ctrl_len);
 
@@ -497,10 +504,9 @@ void initialize_sstp()
   attribute = NULL;
   attr_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
   attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
-			      &attr_data,
-			      sizeof(uint16_t));  
-  send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST,
-			   attribute->data, attribute->length);
+			       &attr_data, sizeof(uint16_t));  
+  send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, 
+			   attribute->data, 1, attribute->length);
 
   free(attribute->data);
   free(attribute);
@@ -610,16 +616,31 @@ int sstp_fork()
   pppd_args[i++] = "pppd";
 
   pppd_args[i++] = "nodetach";
-  pppd_args[i++] = "local";
-  pppd_args[i++] = "noauth";
-  /* pppd_args[i++] = "require-mschap"; */
-  pppd_args[i++] = "mtu"; 
-  pppd_args[i] = xmalloc(10);
-  snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++;
+  /* pppd_args[i++] = "local"; */
+  /* pppd_args[i++] = "mppe-stateful"; */
+  
+  /* pppd_args[i++] = "noauth"; */
 
-  pppd_args[i++] = "remotename"; pppd_args[i++] = "test-sstp"; 
-  pppd_args[i++] = "user"; pppd_args[i++] = "test-sstp";
-  pppd_args[i++] = "password"; pppd_args[i++] = "Hello1234";
+  /* pppd_args[i++] = "mtu";  */
+  /* pppd_args[i] = xmalloc(10); */
+  /* snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++; */
+  /* pppd_args[i++] = "mru";  */
+  /* pppd_args[i] = xmalloc(10); */
+  /* snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++; */
+
+  /* pppd_args[i++] = "remotename"; pppd_args[i++] = "test-sstp"; */
+  /* pppd_args[i++] = "name"; pppd_args[i++] = "test-sstp"; */
+  /* pppd_args[i++] = "user"; pppd_args[i++] = "test-sstp"; */
+  /* pppd_args[i++] = "name"; pppd_args[i++] = "test-sstp"; */
+  /* pppd_args[i++] = "password"; pppd_args[i++] = "Hello1234";   */
+  /* pppd_args[i++] = "remotename"; pppd_args[i++] = "DC-VPN-CA";   */
+  /* pppd_args[i++] = "bsdcomp"; pppd_args[i++] = "15"; */
+  /* pppd_args[i++] = "crtscts"; */
+  pppd_args[i++] = "lock";
+  pppd_args[i++] = "logfile";   pppd_args[i++] = "/home/hugsy/code/sstpclient/misc/pppd_debug";
+  /* pppd_args[i++] = "default-asyncmap"; */
+  pppd_args[i++] = "debug";
+  pppd_args[i++] = "sync";
   
   pppd_args[i++] = NULL;
   

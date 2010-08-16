@@ -9,13 +9,30 @@ AC_PROG_MAKE_SET
 dnl Checks for header files and libs
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
-AC_CHECK_HEADERS(unistd.h getopt.h netdb.h inittypes.h signal.h string.h)
-AC_CHECK_HEADERS(sys/types.h sys/socket.h stdarg.h arpa/inet.h)
-AC_CHECK_HEADERS(gnutls/gnutls.h)
+AC_CHECK_HEADERS(arpa/inet.h \
+errno.h \
+getopt.h \
+gnutls/gnutls.h \
+inttypes.h \
+libsstp.h \
+netdb.h \
+pty.h \
+signal.h \
+sstpclient.h \
+stdarg.h \
+stdint.h \
+stdio.h \
+stdlib.h \
+string.h \
+sys/select.h \
+sys/socket.h \
+sys/time.h \
+sys/types.h \
+time.h \
+unistd.h)
 
-AC_CHECK_HEADERS(iconv.h)
 AC_CHECK_LIB(gnutls, gnutls_init,, AC_MSG_ERROR("GnuTLS lib required"))
-AC_CHECK_FUNCS(select socket getaddrinfo strstr strcasestr daemon)
+AC_CHECK_LIB(util, openpty,, AC_MSG_ERROR("util lib required"))
 AC_CONFIG_FILES([Makefile])
 
 dnl Create output

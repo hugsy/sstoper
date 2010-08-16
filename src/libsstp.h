@@ -81,11 +81,14 @@ enum attr_status
 /* sstp client context */
 enum 
   {
-    CLIENT_CALL_DISCONNECTED,
+    CLIENT_CALL_DISCONNECTED = 0,
     CLIENT_CONNECT_REQUEST_SENT,
     CLIENT_CONNECT_ACK_RECEIVED,
     CLIENT_CALL_CONNECTED    
   };
+
+/* string conversion */
+const char* sstp_variables_str[256];
 
 
 /* data structures */
@@ -152,6 +155,7 @@ void initialize_sstp();
 void sstp_loop();
 void sstp_send(void*, size_t);
 void send_sstp_data_packet(void*, size_t);
+void send_sstp_control_packet(uint8_t, sstp_attribute_header_t*, uint16_t, size_t);
 
 int sstp_decode(void*, ssize_t);
 int sstp_decode_attributes(uint16_t, void*, ssize_t);
