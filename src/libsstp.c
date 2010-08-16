@@ -40,9 +40,10 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
 {
   sstp_header_t* header = (sstp_header_t*) recv_buf;
   
-  return (header->version == SSTP_VERSION) && \
-    (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET) && \
-    ntohs(header->length)==recv_len;
+  return (header->version == SSTP_VERSION) \
+    && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET) ;
+  
+    /* && ntohs(header->length)==recv_len; */
 }
 
 
@@ -603,45 +604,39 @@ int get_status_info(void* data, uint16_t attr_len)
 
 int sstp_fork() 
 {
-  /* shamely copied from ssltunnel */
+  /* this part comes from ssltunnel */
   
   pid_t ppp_pid;
   int retcode, amaster, aslave, i;
   struct termios pty;
-  const char pppd_path[] = "/usr/sbin/pppd";
+  char pppd_path[] = "/usr/sbin/pppd";
   char *pppd_args[128];
-
-  
+ 
   i = 0;
   pppd_args[i++] = "pppd";
 
   pppd_args[i++] = "nodetach";
-  /* pppd_args[i++] = "local"; */
-  /* pppd_args[i++] = "mppe-stateful"; */
-  
-  /* pppd_args[i++] = "noauth"; */
-
-  /* pppd_args[i++] = "mtu";  */
-  /* pppd_args[i] = xmalloc(10); */
-  /* snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++; */
-  /* pppd_args[i++] = "mru";  */
-  /* pppd_args[i] = xmalloc(10); */
-  /* snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++; */
-
-  /* pppd_args[i++] = "remotename"; pppd_args[i++] = "test-sstp"; */
-  /* pppd_args[i++] = "name"; pppd_args[i++] = "test-sstp"; */
-  /* pppd_args[i++] = "user"; pppd_args[i++] = "test-sstp"; */
-  /* pppd_args[i++] = "name"; pppd_args[i++] = "test-sstp"; */
-  /* pppd_args[i++] = "password"; pppd_args[i++] = "Hello1234";   */
-  /* pppd_args[i++] = "remotename"; pppd_args[i++] = "DC-VPN-CA";   */
-  /* pppd_args[i++] = "bsdcomp"; pppd_args[i++] = "15"; */
-  /* pppd_args[i++] = "crtscts"; */
+  pppd_args[i++] = "local";
+  pppd_args[i++] = "noauth";
   pppd_args[i++] = "lock";
-  pppd_args[i++] = "logfile";   pppd_args[i++] = "/home/hugsy/code/sstpclient/misc/pppd_debug";
-  /* pppd_args[i++] = "default-asyncmap"; */
-  pppd_args[i++] = "debug";
   pppd_args[i++] = "sync";
+  pppd_args[i++] = "default-asyncmap";
   
+  pppd_args[i++] = "mtu";
+  pppd_args[i] = xmalloc(10);
+  snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++;
+  pppd_args[i++] = "mru";
+  pppd_args[i] = xmalloc(10);
+  snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++;
+  pppd_args[i++] = "remotename"; pppd_args[i++] = "test-sstp";
+  pppd_args[i++] = "name"; pppd_args[i++] = "test-sstp";
+  pppd_args[i++] = "user"; pppd_args[i++] = "test-sstp";
+  pppd_args[i++] = "password"; pppd_args[i++] = "Hello1234";
+  
+  
+  pppd_args[i++] = "logfile";   pppd_args[i++] = "/tmp/sstpclient_pppd_debug";
+  pppd_args[i++] = "debug";
+    
   pppd_args[i++] = NULL;
   
   memset(&pty, 0, sizeof(struct termios));
