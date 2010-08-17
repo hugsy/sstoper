@@ -127,7 +127,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 }
 
 
-void parse_check_args(char* argument, char* default_value) 
+void parse_check_args(const char* argument, const char* default_value) 
 {
   if (argument == NULL)
     {
