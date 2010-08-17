@@ -13,9 +13,12 @@
 #include <gnutls/gnutls.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 
 #include "sstpclient.h"
 #include "libsstp.h"
+
+/* extern sstp_context_t* ctx; */
 
 
 void xlog(int type, const char* fmt, ...) 
@@ -70,6 +73,8 @@ void usage(char* name, int retcode)
 	  "Usage: %s [ARGUMENTS]\n"
 	  "\t-s, --server <sstp.server.address> (mandatory)\tSSTP Server\n"
 	  "\t-c, --ca-file /path/to/ca_file (mandatory)\tTrusted CA file\n"
+	  "\t-U, --username USERNAME (mandatory)\tWindows username\n"
+	  "\t-P, --password PASSWORD (mandatory)\tWindows password\n"	  
 	  "\t-p, --port NUM \tAlternative server port (default: 443)\n"
 	  "\t-v, --verbose\tVerbose mode\n"
 	  "\t-h, --help\tHelp menu (this one!)\n",
@@ -89,6 +94,8 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
     { "server",    1, 0, 's' },
     { "port",      1, 0, 'p' },
     { "ca-file",   1, 0, 'c' },
+    { "username",   1, 0, 'U' },
+    { "password",   1, 0, 'P' },
     { 0, 0, 0, 0 } 
   };
 
@@ -97,7 +104,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvs:p:c:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:", long_opts, &curopt_idx);
 
       if (curopt == -1)
 	break;
@@ -108,12 +115,32 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	case 'v': cfg->verbose++; break;
 	case 's': cfg->server = optarg; break;
 	case 'p': cfg->port = optarg; break;
-	case 'c': cfg->ca_file = optarg; break;  
+	case 'c': cfg->ca_file = optarg; break;
+	case 'U': cfg->username = optarg; break;	  
+	case 'P': cfg->password = optarg; break;	  
 	case '?':
 	default:
 	  usage (argv[0], EXIT_FAILURE);
 	}
       curopt_idx = 0;
+    }
+}
+
+
+void parse_check_args(char* argument, char* default_value) 
+{
+  if (argument == NULL)
+    {
+      if (default_value == NULL) 
+	{
+	  xlog(LOG_ERROR, "Missing required argument.\n\n");
+	  usage("sstpclient", EXIT_FAILURE);
+	}
+      else 
+	{
+	  xlog(LOG_ERROR, "Missing argument: using default value (%s).\n", default_value);	  
+	  argument = default_value;
+	}      
     }
 }
 
@@ -129,7 +156,7 @@ sock_t init_tcp(char* hostname, char* port)
   hostinfo->ai_flags = 0;
   hostinfo->ai_protocol = 0;
 
-  xlog(LOG_INFO, "Connecting to: %s:%s ", hostname, port);
+  xlog(LOG_INFO, "Connecting to %s:%s ", hostname, port);
   
   if (getaddrinfo(hostname, port, hostinfo, &res) == -1)
     {
@@ -159,7 +186,7 @@ sock_t init_tcp(char* hostname, char* port)
       return -1;
     }
 
-  printf("\tOK [%ld]\n", sock);
+  xlog(LOG_INFO, "\tOK [%ld]\n", sock);
 
   freeaddrinfo(res);
   free(hostinfo);
@@ -286,6 +313,12 @@ void sighandle(int signum)
       
     case SIGINT:
     case SIGTERM:
+      if (ctx!=NULL && ctx->pppd_pid < 0)
+	{
+	  kill(ctx->pppd_pid, SIGINT);
+	  waitpid(ctx->pppd_pid, NULL, 0);
+	}
+
       xlog(LOG_INFO, "SIG: Closing connection\n");
       fflush(stdout);
       end_tls_session(SIGINT);
@@ -324,19 +357,11 @@ int main (int argc, char** argv)
   cfg->verbose = 0;
     
   parse_options(cfg, argc, argv);
-
-  if (cfg->server == NULL)
-    {
-      xlog(LOG_ERROR, "Missing required server argument\n");
-      usage(argv[0], EXIT_FAILURE);
-    }
-  if (cfg->ca_file == NULL)
-    {
-      xlog(LOG_ERROR, "Missing required trusted CA file\n");
-      usage(argv[0], EXIT_FAILURE);
-    }
- 
-  if (cfg->port == NULL) cfg->port = "443";
+  parse_check_args(cfg->server, NULL);
+  parse_check_args(cfg->port, "443");
+  parse_check_args(cfg->ca_file, NULL);
+  parse_check_args(cfg->username, NULL);
+  parse_check_args(cfg->password, NULL);  
 
   /* create socket  */
   sockfd = init_tcp(cfg->server, cfg->port);

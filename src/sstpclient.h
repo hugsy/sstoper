@@ -27,8 +27,8 @@ typedef struct
   char* server;
   char* port;  
   char* ca_file;
-  char* crt_file;
-  char* key_file;
+  char* username;
+  char* password;
 } sstp_config;
 
 

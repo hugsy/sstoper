@@ -42,8 +42,8 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
   
   return (header->version == SSTP_VERSION) \
     && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET) ;
-  
-    /* && ntohs(header->length)==recv_len; */
+  /* fixme : savoir pourquoi le 1er msg ppp a une taille de msg != de celle dans le header sstp */
+  /* && ntohs(header->length)==recv_len; */
 }
 
 
@@ -66,6 +66,7 @@ int https_session_negociation()
   generate_guid(guid);
   
   /*
+    options possibles pour la requete
     SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 
     SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7}
     Content-Length: 18446744073709551615
@@ -220,7 +221,7 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
   ctrl_pkt = is_control_packet(sstp_hdr);
   
   if (cfg->verbose)
-      xlog(LOG_INFO, "\t-> %s packet\n", ctrl_pkt?"Control":"Data");
+      xlog(LOG_INFO, "\t-> %s packet\n", ctrl_pkt ? "Control" : "Data");
 
   sstp_pkt_len -= sizeof(sstp_header_t);
   if (sstp_pkt_len <= 0)
@@ -261,6 +262,8 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
 
 	  retcode = sstp_fork();
 	  if (retcode < 0) return -1;
+	  ctx->pppd_pid = retcode;
+	  
 	  break;
 	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
@@ -309,12 +312,10 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
     }
   else 
     {
-      void* data;
-      int data_len;
+      void* data_ptr;
 
-      data = recv_buf + sizeof(sstp_header_t);
-      data_len = sstp_pkt_len - sizeof(sstp_header_t);      
-      retcode = write(1, data, data_len);
+      data_ptr = recv_buf + sizeof(sstp_header_t);
+      retcode = write(1, data_ptr, sstp_pkt_len);
 
       if (retcode < 0) 
 	{
@@ -500,7 +501,8 @@ void initialize_sstp()
   ctx->retry = 5;
   ctx->state = CLIENT_CALL_DISCONNECTED;
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
-
+  ctx->pppd_pid = -1;
+  
   /* send SSTP_MSG_CALL_CONNECT_REQUEST message */
   attribute = NULL;
   attr_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
@@ -546,11 +548,13 @@ int set_crypto_binding(void* data)
       xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", hash);
       return -1;
     }
-	  	  
-  if (hash & CERT_HASH_PROTOCOL_SHA1)
-    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
-  else if (hash &CERT_HASH_PROTOCOL_SHA256)
+
+  /* choose strongest algorithm */
+  if (hash & CERT_HASH_PROTOCOL_SHA256)
     ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
+  else if (hash & CERT_HASH_PROTOCOL_SHA1)
+    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
+
   
   if (cfg->verbose)
     xlog(LOG_INFO, "\t\t--> hash: %#x\n", hash);
@@ -613,30 +617,18 @@ int sstp_fork()
   char *pppd_args[128];
  
   i = 0;
-  pppd_args[i++] = "pppd";
-
+  pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
-  pppd_args[i++] = "lock";
   pppd_args[i++] = "sync";
-  pppd_args[i++] = "default-asyncmap";
-  
-  pppd_args[i++] = "mtu";
-  pppd_args[i] = xmalloc(10);
-  snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++;
-  pppd_args[i++] = "mru";
-  pppd_args[i] = xmalloc(10);
-  snprintf(pppd_args[i],10,"%d",gnutls_record_get_max_size(*tls)-sizeof(sstp_header_t));i++;
-  pppd_args[i++] = "remotename"; pppd_args[i++] = "test-sstp";
-  pppd_args[i++] = "name"; pppd_args[i++] = "test-sstp";
-  pppd_args[i++] = "user"; pppd_args[i++] = "test-sstp";
-  pppd_args[i++] = "password"; pppd_args[i++] = "Hello1234";
-  
-  
+  pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
+  pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
   pppd_args[i++] = "logfile";   pppd_args[i++] = "/tmp/sstpclient_pppd_debug";
+  pppd_args[i++] = "lcp-max-configure"; pppd_args[i++] = "40"; pppd_args[i++] = "9600";
   pppd_args[i++] = "debug";
-    
+  pppd_args[i++] = "nodefaultroute";
   pppd_args[i++] = NULL;
   
   memset(&pty, 0, sizeof(struct termios));
@@ -691,13 +683,8 @@ int sstp_fork()
 	  xlog (LOG_ERROR, "execv failed: %s", strerror(errno));
 	  exit(1);
 	}
-
-      return 0;
     }
   
-  else
-    {
-      xlog (LOG_ERROR, "fork failed: %s", strerror(errno));
-      return -1;
-    }
+  xlog (LOG_ERROR, "sstp_fork: you should never be here: %s", strerror(errno));
+  return -1;
 }

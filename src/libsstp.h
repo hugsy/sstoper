@@ -140,6 +140,7 @@ typedef struct __sstp_context
 {
   unsigned char state;
   unsigned char retry;
+  pid_t pppd_pid;
   struct timeval negociation_timer;
   unsigned char hash_algorithm;
   uint32_t nonce[4];  
