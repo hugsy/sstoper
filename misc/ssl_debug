@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ssl_init keys string:
 0.0.0.0,443,sstp,/home/hugsy/code/sstpclient/misc/server-key.pem
 ssl_init found host entry 0.0.0.0,443,sstp,/home/hugsy/code/sstpclient/misc/server-key.pem
@@ -9321,3 +9322,5 @@ association_find: TCP port 443 found 0x2b715d0
 dissect_ssl3_record decrypted len 48
 decrypted app data fragment:  0    (   ¯’„½ØK¦œzk9¦/\ œÜÖ•%±
 dissect_ssl3_record found association 0x2b715d0
+=======
+>>>>>>> parent of 4091884... putain ca marche !!!!
