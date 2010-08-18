@@ -121,14 +121,23 @@ static char* attrib_status_str[] =
   };
 
 
-/* sstp client context */
-enum 
+/* sstp client status */
+enum client_status
   {
     CLIENT_CALL_DISCONNECTED = 0,
-    CLIENT_CONNECT_REQUEST_SENT,
-    CLIENT_CONNECT_ACK_RECEIVED,
-    CLIENT_CALL_CONNECTED    
+    CLIENT_CONNECT_REQUEST_SENT = 1,
+    CLIENT_CONNECT_ACK_RECEIVED = 2,
+    CLIENT_CALL_CONNECTED = 3
   };
+
+static char* client_status_str[] =
+  {
+    "CLIENT_CALL_DISCONNECTED",
+    "CLIENT_CONNECT_REQUEST_SENT",
+    "CLIENT_CONNECT_ACK_RECEIVED",
+    "CLIENT_CALL_CONNECTED",
+  };
+
 
 /* data structures */
 typedef struct __sstp_header
@@ -160,6 +169,12 @@ typedef struct __sstp_attribute
 
 /* uint24_t n'existe pas */
 /* uint24_t reserved1; */
+#ifndef uint24_t
+typedef struct _uint24_t
+{
+  uint8_t byte[3];
+} uint24_t;
+#endif
 
 typedef struct __sstp_attribute_crypto_bind_req
 {
@@ -196,7 +211,7 @@ typedef struct __sstp_context
   uint32_t cmac[8];
 } sstp_context_t;
 
-sstp_context_t* ctx;
+static sstp_context_t* ctx;
 
 
 /* functions declarations  */

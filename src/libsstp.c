@@ -1,7 +1,4 @@
 #define _POSIX_SOURCE 1
-#ifdef __linux__
-#define _GNU_SOURCE
-#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -19,7 +16,6 @@
 
 #include "libsstp.h"
 #include "sstpclient.h"
-
 
 void generate_guid(char data[])
 {
@@ -43,8 +39,9 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
   sstp_header_t* header = (sstp_header_t*) recv_buf;
   
   return (header->version == SSTP_VERSION) \
-    && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET) \
-    && ntohs(header->length)==recv_len;
+    && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET);
+  
+    /* && ntohs(header->length)==recv_len; */
 }
 
 
@@ -58,15 +55,15 @@ int https_session_negociation()
 {
   ssize_t rbytes;
   char* buf;
-  size_t recv_size;
+  size_t read_size;
   char guid[39];
-  
+
   rbytes = -1;
-  recv_size = gnutls_record_get_max_size(*tls);
-  buf = (char*) xmalloc(recv_size);
+  read_size = gnutls_record_get_max_size(*tls);
+  buf = (char*) xmalloc(read_size);
   generate_guid(guid);
-   
-  snprintf(buf, recv_size,
+  
+  snprintf(buf, read_size,
 	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
 	   "SSTPCORRELATIONID: %s\r\n"
 	   "Content-Length: %llu\r\n"
@@ -80,8 +77,8 @@ int https_session_negociation()
 
   sstp_send(buf, strlen(buf));
   
-  memset(buf, 0, recv_size);
-  rbytes = gnutls_record_recv (*tls, buf, recv_size);
+  memset(buf, 0, read_size);
+  rbytes = gnutls_record_recv (*tls, buf, read_size);
       
   if (rbytes > 0)
     {
@@ -130,37 +127,35 @@ void initialize_sstp()
   attribute_len = sizeof(sstp_attribute_header_t) + sizeof(uint16_t);
   attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
 			       (void*)&attribute_data, sizeof(uint16_t));
-
   
   send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, attribute,
 			   1, attribute_len);
 
   free(attribute);
 
-  
+
   /* set alarm and change state */
   alarm(ctx->negociation_timer.tv_sec);
   ctx->state = CLIENT_CONNECT_REQUEST_SENT;
- 
+
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Client is now %s (%#x)\n", client_status_str[ctx->state], ctx->state);
+  
 }
 
 
 void sstp_loop() 
 {
-  ssize_t rbytes;
-  void* buf;
-  size_t rbuf_max_size;
+  size_t read_max_size;
   fd_set msrd;
   int retcode;
-
   
   read_max_size = gnutls_record_get_max_size(*tls);
- 
+
   initialize_sstp();
-   
+  
   while(ctx->state != CLIENT_CALL_DISCONNECTED)
     {
-      
       FD_ZERO(&msrd);
       FD_SET(0, &msrd);
       FD_SET(sockfd, &msrd);
@@ -177,18 +172,19 @@ void sstp_loop()
       if (FD_ISSET(0, &msrd)) 
 	{
 	  /* read from 0 and sstp_send to dest */
-	  buf = xmalloc(read_max_size);
-	  rbytes = read(0, buf, read_max_size);
-	  send_sstp_data_packet(buf, rbytes);
-	  free(buf);
+	  char rbuffer[read_max_size];
+	  ssize_t rbytes;
+	  rbytes = read(0, rbuffer, read_max_size);
+	  send_sstp_data_packet(rbuffer, rbytes);
 	}
       
-      if (FD_ISSET(sockfd, &msrd))
+      if (FD_ISSET(sockfd, &msrd)) 
 	{
 	  /* sstp_read data from sockfd and write it to 1 */
-	  buf = xmalloc(read_max_size);
-	  rbytes = gnutls_record_recv (*tls, buf, read_max_size);
-	  	  
+	  char rbuffer[read_max_size];
+	  ssize_t rbytes;
+	  sleep(2);	  
+	  rbytes = gnutls_record_recv (*tls, rbuffer, read_max_size);
 	  if (rbytes < 0)
 	    {
 	      retcode = rbytes;
@@ -205,15 +201,15 @@ void sstp_loop()
 	      if (cfg->verbose)
 		xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
 
-	      retcode = sstp_decode(buf, rbytes);
+	      retcode = sstp_decode(rbuffer, rbytes);
 	    }
 	  
-	  free(buf);
-
 	  if (retcode < 0) break;
 	}
-    }
 
+    }
+  
+  /* free(rbuffer); */
   free(ctx);
 }
 
@@ -289,14 +285,14 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
   
   if (is_control)
     {
-      sstp_control_header_t* ctrl_hdr;
-      uint16_t ctrl_type, ctrl_num_attr;
-      void* first_attr_ptr;
+      sstp_control_header_t* control_header;
+      uint16_t control_type, control_num_attributes;
+      void* attribute_ptr;
 
-      ctrl_hdr = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
-      ctrl_type = ntohs( ctrl_hdr->message_type );
-      ctrl_num_attr = ntohs( ctrl_hdr->num_attributes );
-      first_attr_ptr = (void*)(ctrl_hdr) + sizeof(sstp_control_header_t);
+      control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
+      control_type = ntohs( control_header->message_type );
+      control_num_attributes = ntohs( control_header->num_attributes );
+      attribute_ptr = (void*)(control_header) + sizeof(sstp_control_header_t);
 
       
       /* checking control header */
@@ -307,7 +303,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  return -1;
 	}
 
-      if (!ctrl_type || ctrl_type > SSTP_MSG_ECHO_RESPONSE)
+      if (!control_type || control_type > SSTP_MSG_ECHO_RESPONSE)
 	{
 	  xlog(LOG_ERROR, "Incorrect control packet\n");
 	  return -1;  
@@ -317,14 +313,14 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       /* parsing control header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (%#x)\n", control_messages_types_str[ctrl_type], ctrl_type);
-	  xlog(LOG_INFO, "\t-> num_attr:%x\n", ctrl_num_attr);
+	  xlog(LOG_INFO, "\t-> type: %s (%#x)\n", control_messages_types_str[control_type], control_type);
+	  xlog(LOG_INFO, "\t-> num_attr:%x\n", control_num_attributes);
 	}
       
-      switch (ctrl_type)
+      switch (control_type)
 	{
 	case SSTP_MSG_CALL_CONNECT_ACK:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
+	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  retcode = sstp_fork();
@@ -337,7 +333,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
 	  xlog(LOG_ERROR, "Server refused connection\n");
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
+	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  if ( ctx->state==CLIENT_CONNECT_REQUEST_SENT && ctx->retry )
@@ -346,19 +342,18 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
 	      ctx->retry--;
 	      initialize_sstp();
-	      break;	      
 	    }
 
 	  break;
 	  
 	case SSTP_MSG_CALL_ABORT:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
+	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  break;
 	  
 	case SSTP_MSG_CALL_DISCONNECT:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
+	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT_ACK, NULL, 0, 0);
@@ -373,7 +368,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	case SSTP_MSG_CALL_CONNECT_REQUEST:
 	case SSTP_MSG_CALL_DISCONNECT_ACK:
 	default :
-	  xlog(LOG_ERROR, "Client cannot handle type %#x\n", ctrl_type);
+	  xlog(LOG_ERROR, "Client cannot handle type %#x\n", control_type);
 	  ctx->state = CLIENT_CALL_DISCONNECTED;
 	  return -1;
 	}
@@ -433,62 +428,62 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
   /* attributes parsing */
   while (attrnum) 
     {
-      sstp_attribute_header_t* ctrl_attr_hdr;
-      void* ctrl_attr_data;
-      uint8_t attr_id;
-      uint16_t attr_len;
+      sstp_attribute_header_t* attribute_header;
+      void* attribute_data;
+      uint8_t attribute_id;
+      uint16_t attribute_length;
       
-      ctrl_attr_hdr = (sstp_attribute_header_t*) attr_ptr;
-      attr_id = ctrl_attr_hdr->attribute_id;
-      attr_len = ntohs( ctrl_attr_hdr->packet_length );
-      ctrl_attr_data = (attr_ptr + sizeof(sstp_attribute_header_t));
+      attribute_header = (sstp_attribute_header_t*) attr_ptr;
+      attribute_id = attribute_header->attribute_id;
+      attribute_length = ntohs( attribute_header->packet_length );
+      attribute_data = (attr_ptr + sizeof(sstp_attribute_header_t));
 
 
       /* checking attribute header*/
-      bytes_to_read -= attr_len;
+      bytes_to_read -= attribute_length;
       if (bytes_to_read < 0) 
 	{
 	  xlog(LOG_ERROR, "Trying to read at incorrect offset in control packet.\n");
 	  return -1;
 	}
-      if (attr_id > SSTP_ATTRIB_CRYPTO_BINDING_REQ)
+      if (attribute_id > SSTP_ATTRIB_CRYPTO_BINDING_REQ)
 	{
 	  xlog(LOG_ERROR, "Incorrect attribute id.\n");
 	  return -1;
 	}
-
+      	  sleep(5);
       
       /* parsing attribute header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t\t--> attr_id:%s (%#x)\n",attr_types_str[attr_id], attr_id);
-	  xlog(LOG_INFO, "\t\t--> len:%d\n", attr_len);
+	  xlog(LOG_INFO, "\t\t--> attribute_id:%s (%#x)\n",attr_types_str[attribute_id], attribute_id);
+	  xlog(LOG_INFO, "\t\t--> len:%d\n", attribute_length);
 	}
-      
-      switch (attr_id)
+
+      switch (attribute_id)
 	{
 	case SSTP_ATTRIB_NO_ERROR:
 	  break;
 
 	case SSTP_ATTRIB_STATUS_INFO:
-	  retcode = attribute_status_info(ctrl_attr_data, attr_len);
+	  retcode = attribute_status_info(attribute_data, attribute_length);
 	  break;
 	  
-	case SSTP_ATTRIB_CRYPTO_BINDING_REQ:
-	  retcode = crypto_set_binding(ctrl_attr_data);
+	case SSTP_ATTRIB_CRYPTO_BINDING_REQ:	  
+	  retcode = crypto_set_binding(attribute_data);
 	  break;
 
 	  /* cas a ne pas traiter */
 	case SSTP_ATTRIB_CRYPTO_BINDING:
 	case SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID:
 	default:
-	  xlog(LOG_ERROR, "Attribute ID %#x is not handled on client side.\n", attr_id);
+	  xlog(LOG_ERROR, "Attribute ID %#x is not handled on client side.\n", attribute_id);
 	  retcode = -1;
 	}
 
       if (retcode < 0) break;
             
-      attr_ptr += attr_len;
+      attr_ptr += attribute_length;
       attrnum--;
     }
   
@@ -532,7 +527,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attribute,
   while (attribute_number)
     {
       sstp_attribute_header_t* cur_attr = (sstp_attribute_header_t*)attr_ptr;    
-      memcpy(data_ptr, attribute, cur_attr->packet_length);
+      memcpy(data_ptr, attr_ptr, cur_attr->packet_length);
 
       attr_ptr += cur_attr->packet_length;
       data_ptr += cur_attr->packet_length;
@@ -543,6 +538,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attribute,
   send_sstp_packet(SSTP_CONTROL_PACKET, data, control_length);
 
   free(data);
+  
 }
 
 
@@ -621,13 +617,18 @@ int crypto_set_binding(void* data)
   /* disable negociation timer */
   alarm(0);
 
+  sleep(5);
+  
   /* check state */
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
     {
       xlog(LOG_ERROR, "Incorrect message for this state\n");
-      if (cfg->verbose)
-	xlog(LOG_ERROR, "Current state: %#x\nExpected: %#x\n",
-	     ctx->state, CLIENT_CONNECT_REQUEST_SENT);
+      if (cfg->verbose) 
+	{
+	  xlog(LOG_ERROR, "Current state: %#x. Expected %#x\n",
+	       ctx->state, CLIENT_CONNECT_REQUEST_SENT);
+	}
+      
       return -1;
     }
   
@@ -791,6 +792,5 @@ int sstp_fork()
       return -1;
     }
 
-  return -1;
 }
 

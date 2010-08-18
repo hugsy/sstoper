@@ -140,7 +140,7 @@ void check_arg(char** argument, char* default_value)
 	}
       else 
 	{
-	  xlog(LOG_ERROR, "Using default value (%s).\n", default_value);
+	  xlog(LOG_ERROR, "Using default value: %s\n", default_value);
 	  *argument = default_value;
 	}
     }
@@ -359,13 +359,13 @@ int main (int argc, char** argv)
   cfg->verbose = 0;
     
   parse_options(cfg, argc, argv);
-  check_arg(&cfg->server, NULL);
-  check_arg(&cfg->port, "443");
-  check_arg(&cfg->ca_file, NULL);
-  check_arg(&cfg->username, NULL);
-  check_arg(&cfg->password, NULL);
-  check_arg(&cfg->logfile, NULL);
-  check_arg(&cfg->pppd_path, "/usr/sbin/pppd");
+  /* check_arg(&cfg->server, NULL); */
+  /* check_arg(&cfg->port, "443"); */
+  /* check_arg(&cfg->ca_file, NULL); */
+  /* check_arg(&cfg->username, NULL); */
+  /* check_arg(&cfg->password, NULL); */
+  /* check_arg(&cfg->logfile, NULL); */
+  /* check_arg(&cfg->pppd_path, "/usr/sbin/pppd"); */
   
   
   /* create socket  */
@@ -387,7 +387,7 @@ int main (int argc, char** argv)
     goto end;
 
   /* starting sstp */
-  if (cfg->verbose) xlog(LOG_INFO, "Initiating SSTP negociation\n");
+  if (cfg->verbose) xlog(LOG_INFO, "Initiating SSTP negociation\n");  
   sstp_loop();
 
  end:  
