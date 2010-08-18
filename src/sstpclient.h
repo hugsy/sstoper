@@ -29,6 +29,8 @@ typedef struct
   char* ca_file;
   char* username;
   char* password;
+  char* logfile;
+  char* pppd_path;
 } sstp_config;
 
 
@@ -41,7 +43,6 @@ sstp_config *cfg;
 void* xmalloc(size_t);
 void xlog(int, const char*, ...);
 void end_tls_session(int);
-
 
 /* compat ansi */
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);

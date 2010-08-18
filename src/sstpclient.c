@@ -18,8 +18,6 @@
 #include "sstpclient.h"
 #include "libsstp.h"
 
-/* extern sstp_context_t* ctx; */
-
 
 void xlog(int type, const char* fmt, ...) 
 {
@@ -32,14 +30,10 @@ void xlog(int type, const char* fmt, ...)
     case LOG_DEBUG:
     case LOG_INFO:
     case LOG_ERROR:
-      vfprintf(stderr, fmt, ap); fflush(stderr);
+      vfprintf(stderr, fmt, ap);
       break;
-
-    default:
-      fprintf(stderr, "[ERROR] Unknown format\n"); fflush(stderr);
-      exit(1);
     }
-  
+  fflush(stderr);
   va_end(ap);
 }
 
@@ -65,8 +59,10 @@ void usage(char* name, int retcode)
 {
   FILE* fd;
   
-  if (retcode == 0) fd = stdout;
-  else fd = stderr;
+  if (retcode==0)
+    fd = stdout;
+  else
+    fd = stderr;
       
   fprintf(fd,
 	  "SSTPClient: SSTP VPN client for *nix\n"
@@ -76,8 +72,11 @@ void usage(char* name, int retcode)
 	  "\t-U, --username USERNAME (mandatory)\tWindows username\n"
 	  "\t-P, --password PASSWORD (mandatory)\tWindows password\n"	  
 	  "\t-p, --port NUM \tAlternative server port (default: 443)\n"
+	  "\t-x, --pppd-path /path/to/pppd \tSpecifies path to pppd executable (default: /usr/sbin/pppd)\n"
 	  "\t-v, --verbose\tVerbose mode\n"
-	  "\t-h, --help\tHelp menu (this one!)\n",
+	  "\t-l, --logfile /path/to/pppd_logfile\tLog pppd activity in specified file\n"
+	  "\t-h, --help\tShow this menu\n"
+	  "\n\n",
 	  name);
   
   exit(retcode);
@@ -94,8 +93,10 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
     { "server",    1, 0, 's' },
     { "port",      1, 0, 'p' },
     { "ca-file",   1, 0, 'c' },
-    { "username",   1, 0, 'U' },
-    { "password",   1, 0, 'P' },
+    { "username",  1, 0, 'U' },
+    { "password",  1, 0, 'P' },
+    { "pppd-path", 1, 0, 'x' },
+    { "logfile",   1, 0, 'l' },
     { 0, 0, 0, 0 } 
   };
 
@@ -104,10 +105,9 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:x:l:", long_opts, &curopt_idx);
 
-      if (curopt == -1)
-	break;
+      if (curopt == -1) break;
       
       switch (curopt)
 	{
@@ -117,8 +117,10 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	case 'p': cfg->port = optarg; break;
 	case 'c': cfg->ca_file = optarg; break;
 	case 'U': cfg->username = optarg; break;	  
-	case 'P': cfg->password = optarg; break;	  
-	case '?':
+	case 'P': cfg->password = optarg; break;
+	case 'x': cfg->pppd_path = optarg; break;	  
+	case 'l': cfg->logfile = optarg; break;
+  	case '?':
 	default:
 	  usage (argv[0], EXIT_FAILURE);
 	}
@@ -127,9 +129,9 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 }
 
 
-void parse_check_args(const char* argument, const char* default_value) 
+void check_arg(char** argument, char* default_value) 
 {
-  if (argument == NULL)
+  if ((*argument) == NULL)
     {
       if (default_value == NULL) 
 	{
@@ -138,9 +140,9 @@ void parse_check_args(const char* argument, const char* default_value)
 	}
       else 
 	{
-	  xlog(LOG_ERROR, "Missing argument: using default value (%s).\n", default_value);	  
-	  argument = default_value;
-	}      
+	  xlog(LOG_ERROR, "Using default value (%s).\n", default_value);
+	  *argument = default_value;
+	}
     }
 }
 
@@ -161,7 +163,7 @@ sock_t init_tcp(char* hostname, char* port)
   if (getaddrinfo(hostname, port, hostinfo, &res) == -1)
     {
       perror("getaddrinfo");
-      exit(-1);
+      return -1;
     }
   
   for (ll=res; ll != NULL; ll=ll->ai_next)
@@ -284,15 +286,15 @@ void end_tls_session(int reason)
   
   retcode = gnutls_bye(*tls, GNUTLS_SHUT_RDWR);
   if (retcode != GNUTLS_E_SUCCESS)
-    xlog(LOG_ERROR, "end_tls_session: %s", gnutls_strerror(retcode));
+    xlog(LOG_ERROR, "end_tls_session: %s\n", gnutls_strerror(retcode));
   
   retcode = shutdown(sockfd, SHUT_RDWR);
   if (retcode < -1)
-    xlog(LOG_ERROR, "end_tls_session: %s", strerror(retcode));
+    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
   
   retcode = close(sockfd);
   if (retcode < -1)
-    xlog(LOG_ERROR, "end_tls_session: %s", strerror(retcode));
+    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
 
   if (cfg->verbose)
     xlog(LOG_INFO, "Freeing regions.\n");
@@ -351,18 +353,21 @@ int main (int argc, char** argv)
   sigaction(SIGTERM, &saction, NULL);
   sigaction(SIGALRM, &saction, NULL);
 
-  /* configuration parsing */
+  /* configuration parsing and privilege check */
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
   cfg->server = NULL;
   cfg->verbose = 0;
     
   parse_options(cfg, argc, argv);
-  parse_check_args(cfg->server, NULL);
-  parse_check_args(cfg->port, "443");
-  parse_check_args(cfg->ca_file, NULL);
-  parse_check_args(cfg->username, NULL);
-  parse_check_args(cfg->password, NULL);  
-
+  check_arg(&cfg->server, NULL);
+  check_arg(&cfg->port, "443");
+  check_arg(&cfg->ca_file, NULL);
+  check_arg(&cfg->username, NULL);
+  check_arg(&cfg->password, NULL);
+  check_arg(&cfg->logfile, NULL);
+  check_arg(&cfg->pppd_path, "/usr/sbin/pppd");
+  
+  
   /* create socket  */
   sockfd = init_tcp(cfg->server, cfg->port);
   

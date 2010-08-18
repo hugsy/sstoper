@@ -40,6 +40,18 @@ enum control_messages_types
     SSTP_MSG_ECHO_REQUEST = 0x0008,
     SSTP_MSG_ECHO_RESPONSE = 0x0009
   };
+static char* control_messages_types_str[] =
+  {"",
+   "SSTP_MSG_CALL_CONNECT_REQUEST",
+   "SSTP_MSG_CALL_CONNECT_ACK",
+   "SSTP_MSG_CALL_CONNECT_NAK",
+   "SSTP_MSG_CALL_CONNECTED",
+   "SSTP_MSG_CALL_ABORT",
+   "SSTP_MSG_CALL_DISCONNECT",
+   "SSTP_MSG_CALL_DISCONNECT_ACK",
+   "SSTP_MSG_ECHO_REQUEST",
+   "SSTP_MSG_ECHO_RESPONSE",
+  };
 
 
 /* SSTP Attribute Message Type */
@@ -51,6 +63,14 @@ enum attr_types
     SSTP_ATTRIB_CRYPTO_BINDING = 0x03,
     SSTP_ATTRIB_CRYPTO_BINDING_REQ = 0x04
   };
+static char* attr_types_str[] =
+  {
+    "SSTP_ATTRIB_NO_ERROR", 
+    "SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID",
+    "SSTP_ATTRIB_STATUS_INFO",
+    "SSTP_ATTRIB_CRYPTO_BINDING",
+    "SSTP_ATTRIB_CRYPTO_BINDING_REQ",
+  };
 
 
 /* Crypto Binding Request Attribute */
@@ -58,6 +78,12 @@ enum crypto_req_attrs
   {
     CERT_HASH_PROTOCOL_SHA1 = 0x01,
     CERT_HASH_PROTOCOL_SHA256 = 0x02
+  };
+
+static char* crypto_req_attrs_str[]=
+  {
+    "CERT_HASH_PROTOCOL_SHA1",
+    "CERT_HASH_PROTOCOL_SHA256"
   };
 
 
@@ -78,6 +104,23 @@ enum attr_status
     ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG = 0x0000000b
   };
 
+static char* attrib_status_str[] =
+  {
+    "ATTRIB_STATUS_NO_ERROR",
+    "ATTRIB_STATUS_DUPLICATE_ATTRIBUTE",
+    "ATTRIB_STATUS_UNRECOGNIZED_ATTRIBUTE",
+    "ATTRIB_STATUS_INVALID_ATTRIB_VALUE_LENGTH",
+    "ATTRIB_STATUS_VALUE_NOT_SUPPORTED",
+    "ATTRIB_STATUS_UNACCEPTED_FRAME_RECEIVED",
+    "ATTRIB_STATUS_RETRY_COUNT_EXCEEDED",
+    "ATTRIB_STATUS_INVALID_FRAME_RECEIVED",
+    "ATTRIB_STATUS_NEGOTIATION_TIMEOUT",
+    "ATTRIB_STATUS_ATTRIB_NOT_SUPPORTED_IN_MSG",
+    "ATTRIB_STATUS_REQUIRED_ATTRIBUTE_MISSING",
+    "ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG",
+  };
+
+
 /* sstp client context */
 enum 
   {
@@ -86,10 +129,6 @@ enum
     CLIENT_CONNECT_ACK_RECEIVED,
     CLIENT_CALL_CONNECTED    
   };
-
-/* string conversion */
-const char* sstp_variables_str[256];
-
 
 /* data structures */
 typedef struct __sstp_header
@@ -134,6 +173,14 @@ typedef struct __sstp_attribute_status_info
   uint32_t status;
 } sstp_attribute_status_info_t;
 
+typedef struct __sstp_attribute_crypto_bind
+{
+  uint32_t hash_bitmask; /* 0-er les 3 octets de poids fort */
+  uint32_t nonce[8];
+  uint32_t certhash[8];
+  uint32_t cmac[8];
+} sstp_attribute_crypto_bind_t;
+
 
 /* sstp client context */
 typedef struct __sstp_context 
@@ -142,8 +189,11 @@ typedef struct __sstp_context
   unsigned char retry;
   pid_t pppd_pid;
   struct timeval negociation_timer;
-  unsigned char hash_algorithm;
-  uint32_t nonce[4];  
+  struct timeval hello_timer;
+  uint8_t hash_algorithm;
+  uint32_t nonce[8];
+  uint32_t certhash[8];
+  uint32_t cmac[8];
 } sstp_context_t;
 
 sstp_context_t* ctx;
@@ -155,15 +205,18 @@ int https_session_negociation();
 void initialize_sstp();
 void sstp_loop();
 void sstp_send(void*, size_t);
+void send_sstp_packet(uint8_t, void*, size_t);
 void send_sstp_data_packet(void*, size_t);
-void send_sstp_control_packet(uint8_t, sstp_attribute_header_t*, uint16_t, size_t);
+void send_sstp_control_packet(uint16_t, void*, uint16_t, size_t);
+
+void* create_attribute(uint8_t, void*, size_t);
 
 int sstp_decode(void*, ssize_t);
 int sstp_decode_attributes(uint16_t, void*, ssize_t);
 
 int is_valid_header(void*, ssize_t);
 int is_control_packet(sstp_header_t*);
-  
-int set_crypto_binding(void*);
-int get_status_info(void*,uint16_t);
 
+int crypto_set_certhash();
+int crypto_set_binding(void*);
+int attribute_status_info(void*,uint16_t);

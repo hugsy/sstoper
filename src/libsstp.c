@@ -13,6 +13,9 @@
 #include <time.h>
 #include <errno.h>
 #include <pty.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <openssl/sha.h>
 
 #include "libsstp.h"
 #include "sstpclient.h"
@@ -20,7 +23,6 @@
 
 void generate_guid(char data[])
 {
-  /* details in http://download.microsoft.com/download/9/5/E/.../%5BMS-DTYP%5D.pdf */
   uint32_t data1, data4;
   uint16_t data2, data3;
 
@@ -41,15 +43,14 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
   sstp_header_t* header = (sstp_header_t*) recv_buf;
   
   return (header->version == SSTP_VERSION) \
-    && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET) ;
-  /* fixme : savoir pourquoi le 1er msg ppp a une taille de msg != de celle dans le header sstp */
-  /* && ntohs(header->length)==recv_len; */
+    && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET) \
+    && ntohs(header->length)==recv_len;
 }
 
 
-int is_control_packet(sstp_header_t* pkt_hdr)
+int is_control_packet(sstp_header_t* packet_header)
 {
-  return (pkt_hdr->reserved & 0x01);
+  return (packet_header->reserved & 0x01);
 }
 
 
@@ -64,18 +65,7 @@ int https_session_negociation()
   recv_size = gnutls_record_get_max_size(*tls);
   buf = (char*) xmalloc(recv_size);
   generate_guid(guid);
-  
-  /*
-    options possibles pour la requete
-    SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1 
-    SSTPCORRELATIONID: {F7FC0718-C386-4D9A-B529-973927075AA7}
-    Content-Length: 18446744073709551615
-    Host: vpn.coyote.looney
-    ClientByPassHLAuth: True\r\n
-    ClientHTTPCookie: 5d41402abc4b2a76b9719d911017c592\r\n
-    SSTPVERSION: 1.0
-  */
-  
+   
   snprintf(buf, recv_size,
 	   "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
 	   "SSTPCORRELATIONID: %s\r\n"
@@ -100,7 +90,7 @@ int https_session_negociation()
     }
   else if (rbytes == 0)
     {
-      xlog(LOG_INFO , "!! Connection has been closed !!\n");
+      xlog(LOG_INFO , "Connection has been closed by beer.\n");
       return -1;
     }
   else 
@@ -117,34 +107,54 @@ int https_session_negociation()
 }
 
 
-void sstp_send(void* data, size_t len)
+void initialize_sstp()
 {
-  ssize_t sbytes;
-
-  sbytes = gnutls_record_send (*tls, data, len);
+  uint16_t attribute_data;
+  int i;
+  void* attribute;
+  size_t attribute_len;
   
-  if (sbytes < 0)
-    {
-      xlog(LOG_ERROR, "gnutls_record_send: %s\n", gnutls_strerror(sbytes));
-      exit(sbytes);
-    }
+  /* initialize sstp context */
+  ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
+  ctx->retry = 5;
+  ctx->state = CLIENT_CALL_DISCONNECTED;
+  ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
+  ctx->pppd_pid = -1;
+  for (i=0; i<8; i++) ctx->nonce[i] = 0x0a0a0a0a;
+  for (i=0; i<8; i++) ctx->cmac[i] = 0x0b0b0b0b;
+  for (i=0; i<8; i++) ctx->cmac[i] = 0x0c0c0c0c;
 
-  xlog(LOG_INFO, " --> %lu %s bytes\n", sbytes,
-       is_control_packet((sstp_header_t*)data)?"control":"data");
   
+  /* send SSTP_MSG_CALL_CONNECT_REQUEST message */
+  attribute_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
+  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(uint16_t);
+  attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
+			       (void*)&attribute_data, sizeof(uint16_t));
+
+  
+  send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, attribute,
+			   1, attribute_len);
+
+  free(attribute);
+
+  
+  /* set alarm and change state */
+  alarm(ctx->negociation_timer.tv_sec);
+  ctx->state = CLIENT_CONNECT_REQUEST_SENT;
+ 
 }
 
 
 void sstp_loop() 
 {
   ssize_t rbytes;
-  char* buf;
+  void* buf;
   size_t rbuf_max_size;
   fd_set msrd;
   int retcode;
 
   
-  rbuf_max_size = gnutls_record_get_max_size(*tls);
+  read_max_size = gnutls_record_get_max_size(*tls);
  
   initialize_sstp();
    
@@ -167,30 +177,34 @@ void sstp_loop()
       if (FD_ISSET(0, &msrd)) 
 	{
 	  /* read from 0 and sstp_send to dest */
-	  buf = (char*) xmalloc(rbuf_max_size);
-	  rbytes = read(0, buf, rbuf_max_size);
+	  buf = xmalloc(read_max_size);
+	  rbytes = read(0, buf, read_max_size);
 	  send_sstp_data_packet(buf, rbytes);
-	  free(buf);	  
+	  free(buf);
 	}
       
       if (FD_ISSET(sockfd, &msrd))
 	{
 	  /* sstp_read data from sockfd and write it to 1 */
-	  buf = (char*) xmalloc(rbuf_max_size);
-	  rbytes = gnutls_record_recv (*tls, buf, rbuf_max_size);
+	  buf = xmalloc(read_max_size);
+	  rbytes = gnutls_record_recv (*tls, buf, read_max_size);
 	  	  
 	  if (rbytes < 0)
 	    {
 	      retcode = rbytes;
 	      xlog(LOG_ERROR, "sstp_loop: gnutls_record_recv: %s\n", gnutls_strerror(rbytes));
 	    }
+	  
 	  else if (rbytes == 0) 
-	    xlog(LOG_INFO, "sstp_loop: EOF\n");
+	    {
+	      xlog(LOG_INFO, "sstp_loop: EOF\n");
+	    }
+	  
 	  else 
 	    {
 	      if (cfg->verbose)
-		xlog(LOG_INFO,"<--  %lu %s bytes\n", rbytes,
-		     is_control_packet((sstp_header_t*)buf)?"control":"data");
+		xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
+
 	      retcode = sstp_decode(buf, rbytes);
 	    }
 	  
@@ -204,74 +218,129 @@ void sstp_loop()
 }
 
 
-int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
+void sstp_send(void* data, size_t data_length)
 {
-  sstp_header_t* sstp_hdr;
-  int ctrl_pkt;
+  ssize_t sbytes;
+
+  sbytes = gnutls_record_send (*tls, data, data_length);
+  
+  if (sbytes < 0)
+    {
+      xlog(LOG_ERROR, "gnutls_record_send: %s\n", gnutls_strerror(sbytes));
+      exit(sbytes);
+    }
+
+  xlog(LOG_INFO, " --> %lu bytes\n", sbytes);
+  
+}
+
+
+void send_sstp_packet(uint8_t type, void* data, size_t data_length)
+{
+  sstp_header_t sstp_header;
+  size_t total_length;
+  void *packet = NULL;
+
+  total_length = sizeof(sstp_header_t) + data_length;
+  memset(&sstp_header, 0, sizeof(sstp_header_t));
+  
+  sstp_header.version = SSTP_VERSION;
+  sstp_header.reserved = type;
+  sstp_header.length = htons(total_length); 
+ 
+  packet = xmalloc(total_length);
+  
+  memcpy(packet, &sstp_header, sizeof(sstp_header_t));
+  memcpy(packet + sizeof(sstp_header_t), data, data_length);
+  
+  sstp_send(packet, total_length);
+  
+  free(packet);
+}
+
+
+int sstp_decode(void* rbuffer, ssize_t sstp_length)
+{
+  sstp_header_t* sstp_header;
+  int is_control;
   int retcode;
  
-  if (!is_valid_header(recv_buf, sstp_pkt_len))
+  if (!is_valid_header(rbuffer, sstp_length))
     {
       xlog(LOG_ERROR, "SSTP packet has invalid header\n");
-      return -1;
+      xlog(LOG_ERROR, "Dropping this packet\n" );
+      return 0;
     }
     
 
-  sstp_hdr = (sstp_header_t*) recv_buf;
-  ctrl_pkt = is_control_packet(sstp_hdr);
+  sstp_header = (sstp_header_t*) rbuffer;
+  is_control = is_control_packet(sstp_header);
   
   if (cfg->verbose)
-      xlog(LOG_INFO, "\t-> %s packet\n", ctrl_pkt ? "Control" : "Data");
+    xlog(LOG_INFO, "\t-> %s packet\n", is_control ? "Control" : "Data");
 
-  sstp_pkt_len -= sizeof(sstp_header_t);
-  if (sstp_pkt_len <= 0)
+  sstp_length -= sizeof(sstp_header_t);
+  if (sstp_length <= 0)
     {
       xlog(LOG_ERROR, "SSTP packet has incorrect length.\n");
       return -1;
     }
   
   
-  if (ctrl_pkt)
+  if (is_control)
     {
       sstp_control_header_t* ctrl_hdr;
       uint16_t ctrl_type, ctrl_num_attr;
       void* first_attr_ptr;
 
-      ctrl_hdr = (sstp_control_header_t*) (recv_buf + sizeof(sstp_header_t));
+      ctrl_hdr = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       ctrl_type = ntohs( ctrl_hdr->message_type );
       ctrl_num_attr = ntohs( ctrl_hdr->num_attributes );
       first_attr_ptr = (void*)(ctrl_hdr) + sizeof(sstp_control_header_t);
+
       
-      sstp_pkt_len -= sizeof(sstp_control_header_t);
-      if (sstp_pkt_len < 0)
+      /* checking control header */
+      sstp_length -= sizeof(sstp_control_header_t);
+      if (sstp_length < 0)
 	{
 	  xlog(LOG_ERROR, "SSTP control packet has invalid size\n");
 	  return -1;
 	}
+
+      if (!ctrl_type || ctrl_type > SSTP_MSG_ECHO_RESPONSE)
+	{
+	  xlog(LOG_ERROR, "Incorrect control packet\n");
+	  return -1;  
+	}
       
-
+      
+      /* parsing control header */
       if (cfg->verbose)
-	xlog(LOG_INFO, "\t-> type:%x num_attr:%x\n", ctrl_type, ctrl_num_attr);
-
+	{
+	  xlog(LOG_INFO, "\t-> type: %s (%#x)\n", control_messages_types_str[ctrl_type], ctrl_type);
+	  xlog(LOG_INFO, "\t-> num_attr:%x\n", ctrl_num_attr);
+	}
       
       switch (ctrl_type)
 	{
 	case SSTP_MSG_CALL_CONNECT_ACK:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
+	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  retcode = sstp_fork();
 	  if (retcode < 0) return -1;
 	  ctx->pppd_pid = retcode;
-	  
+	  if (cfg->verbose)
+	    xlog (LOG_INFO, "pppd forked as %d\n", ctx->pppd_pid);
+
 	  break;
 	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
 	  xlog(LOG_ERROR, "Server refused connection\n");
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
+	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
-	  if ( (ctx->state & CLIENT_CONNECT_REQUEST_SENT) && (ctx->retry) )
+	  if ( ctx->state==CLIENT_CONNECT_REQUEST_SENT && ctx->retry )
 	    {
 	      if (cfg->verbose) xlog(LOG_INFO, "Retrying ...\n");
 	      ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
@@ -283,13 +352,13 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
 	  break;
 	  
 	case SSTP_MSG_CALL_ABORT:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
+	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  break;
 	  
 	case SSTP_MSG_CALL_DISCONNECT:
-	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_pkt_len);
+	  retcode = sstp_decode_attributes(ctrl_num_attr, first_attr_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
 	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT_ACK, NULL, 0, 0);
@@ -304,18 +373,42 @@ int sstp_decode(void* recv_buf, ssize_t sstp_pkt_len)
 	case SSTP_MSG_CALL_CONNECT_REQUEST:
 	case SSTP_MSG_CALL_DISCONNECT_ACK:
 	default :
-	  xlog(LOG_ERROR, "Client cannot unhandle type %#x\n", ctrl_type);
+	  xlog(LOG_ERROR, "Client cannot handle type %#x\n", ctrl_type);
 	  ctx->state = CLIENT_CALL_DISCONNECTED;
-	  return -1;	  
+	  return -1;
 	}
       
     }
   else 
     {
+      int i;
+      size_t attribute_len;
       void* data_ptr;
+      void* attribute;
+      sstp_attribute_crypto_bind_t crypto_settings;
+      
+      data_ptr = rbuffer + sizeof(sstp_header_t);
+      
+      /* if PPP-CHAP is successful, send SSTP_MSG_CALL_CONNECTED */
+      if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 &&
+	   (*(uint8_t*)(data_ptr + 2)) == 0x03 )
+	{
 
-      data_ptr = recv_buf + sizeof(sstp_header_t);
-      retcode = write(1, data_ptr, sstp_pkt_len);
+	  crypto_settings.hash_bitmask = htonl(ctx->hash_algorithm);
+	  for (i=0; i<8; i++) crypto_settings.nonce[i] = htonl(ctx->nonce[i]);
+	  for (i=0; i<8; i++) crypto_settings.certhash[i] = htonl(ctx->certhash[i]);
+	  for (i=0; i<8; i++) crypto_settings.cmac[i] = htonl(ctx->cmac[i]);
+	  
+	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, (void*)&crypto_settings,
+				  sizeof(sstp_attribute_crypto_bind_t));
+	  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
+	  
+	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, &attribute, 1,attribute_len);
+
+	  free(attribute);
+	}
+
+      retcode = write(1, data_ptr, sstp_length);
 
       if (retcode < 0) 
 	{
@@ -350,45 +443,46 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
       attr_len = ntohs( ctrl_attr_hdr->packet_length );
       ctrl_attr_data = (attr_ptr + sizeof(sstp_attribute_header_t));
 
+
+      /* checking attribute header*/
       bytes_to_read -= attr_len;
-      
       if (bytes_to_read < 0) 
 	{
 	  xlog(LOG_ERROR, "Trying to read at incorrect offset in control packet.\n");
 	  return -1;
 	}
-            
+      if (attr_id > SSTP_ATTRIB_CRYPTO_BINDING_REQ)
+	{
+	  xlog(LOG_ERROR, "Incorrect attribute id.\n");
+	  return -1;
+	}
+
+      
+      /* parsing attribute header */
       if (cfg->verbose)
-	xlog(LOG_INFO, "\t\t--> id:%#x len:%d\n", attr_id, attr_len);
+	{
+	  xlog(LOG_INFO, "\t\t--> attr_id:%s (%#x)\n",attr_types_str[attr_id], attr_id);
+	  xlog(LOG_INFO, "\t\t--> len:%d\n", attr_len);
+	}
       
       switch (attr_id)
 	{
 	case SSTP_ATTRIB_NO_ERROR:
-	  printf("SSTP_ATTRIB_NO_ERROR\n");
 	  break;
 
 	case SSTP_ATTRIB_STATUS_INFO:
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "\t\t--> SSTP_ATTRIB_STATUS_INFO\n");
-
-	  retcode = get_status_info(ctrl_attr_data, attr_len);
-	  break;
-	  
-	case SSTP_ATTRIB_CRYPTO_BINDING:
-	  printf("SSTP_ATTRIB_CRYPTO_BINDING\n");
+	  retcode = attribute_status_info(ctrl_attr_data, attr_len);
 	  break;
 	  
 	case SSTP_ATTRIB_CRYPTO_BINDING_REQ:
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "\t\t--> SSTP_ATTRIB_CRYPTO_BINDING_REQ\n");
-
-	  retcode = set_crypto_binding(ctrl_attr_data);
+	  retcode = crypto_set_binding(ctrl_attr_data);
 	  break;
 
+	  /* cas a ne pas traiter */
+	case SSTP_ATTRIB_CRYPTO_BINDING:
 	case SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID:
-	  xlog(LOG_ERROR, "SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID: ");
 	default:
-	  xlog(LOG_ERROR, "Unhandled attribute %#x\n", attr_id);
+	  xlog(LOG_ERROR, "Attribute ID %#x is not handled on client side.\n", attr_id);
 	  retcode = -1;
 	}
 
@@ -402,125 +496,123 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 }
 
 
-void send_sstp_packet(int type, void* data, size_t len)
-{
-  sstp_header_t pkt_hdr;
-  size_t sstp_hdr_len = sizeof(sstp_header_t);
-  size_t total_length = sstp_hdr_len + len;
-  void *pkt = NULL;
-
-  memset(&pkt_hdr, 0, sstp_hdr_len);
-  
-  pkt_hdr.version = SSTP_VERSION;
-  pkt_hdr.reserved = type;
-  pkt_hdr.length = htons(total_length); 
- 
-  pkt = xmalloc(total_length);
-  
-  memcpy(pkt, &pkt_hdr, sstp_hdr_len);
-  memcpy(pkt + sstp_hdr_len, data, len);
-  
-  sstp_send(pkt, total_length);
-  
-  free(pkt);
-}
-
-
 void send_sstp_data_packet(void* data, size_t len) 
 {
   send_sstp_packet(SSTP_DATA_PACKET, data, len);
 }
 
 
-void send_sstp_control_packet(uint8_t msg_type, sstp_attribute_header_t* attrs,
-			      uint16_t attrs_num, size_t attrs_len)
+void send_sstp_control_packet(uint16_t msg_type, void* attribute,
+			      uint16_t attribute_number, size_t attribute_len)
 {
-  sstp_control_header_t ctrl_hdr;
-  size_t ctrl_hdr_len;
-  size_t ctrl_len;
-  void* data;
+  sstp_control_header_t control_header;
+  size_t control_length;
+  void *data, *data_ptr, *attr_ptr;
 
-  if (attrs == NULL && attrs_num != 0)
+  if (attribute == NULL && attribute_number != 0)
     {
       xlog(LOG_ERROR, "No attribute specified. Cannot send message.\n");
       return;
     } 
   
-  ctrl_hdr_len = sizeof(sstp_control_header_t);
-  ctrl_len = ctrl_hdr_len + attrs_len;
-  
-  memset(&ctrl_hdr, 0, sizeof(sstp_control_header_t));
-  
-  ctrl_hdr.message_type = htons(msg_type);
-  ctrl_hdr.num_attributes = htons(attrs_num);
-  
-  data = xmalloc(ctrl_len);
-  memcpy(data, &ctrl_hdr, ctrl_hdr_len);
-  if (attrs_num)
-    memcpy(data + ctrl_hdr_len, attrs, attrs_len);
+  control_length = sizeof(sstp_control_header_t) + attribute_len; 
+  memset(&control_header, 0, sizeof(sstp_control_header_t));
 
-  send_sstp_packet(SSTP_CONTROL_PACKET, data, ctrl_len);
+  /* setting control header */
+  control_header.message_type = htons(msg_type);
+  control_header.num_attributes = htons(attribute_number);
+
+  /* filling control with attributes */
+  data = xmalloc(control_length);
+  memcpy(data, &control_header, sizeof(sstp_control_header_t));
+
+  attr_ptr = attribute;
+  data_ptr = data + sizeof(sstp_control_header_t);
+  
+  while (attribute_number)
+    {
+      sstp_attribute_header_t* cur_attr = (sstp_attribute_header_t*)attr_ptr;    
+      memcpy(data_ptr, attribute, cur_attr->packet_length);
+
+      attr_ptr += cur_attr->packet_length;
+      data_ptr += cur_attr->packet_length;
+      attribute_number--;
+    }
+    
+  /* yield to lower */
+  send_sstp_packet(SSTP_CONTROL_PACKET, data, control_length);
 
   free(data);
 }
 
 
-sstp_attribute_t* create_attribute(uint8_t attr_id, void* attr_data, size_t attr_data_len)
+void* create_attribute(uint8_t attribute_id, void* data, size_t data_length)
 {
-  sstp_attribute_header_t attr_hdr;
-  size_t sstp_attr_hdr_len;
-  sstp_attribute_t* attr;
-  void* data;
+  sstp_attribute_header_t attribute_header;
+  size_t attribute_length;
+  void* attribute;
   
-  if (!attr_data) return NULL;
+  if (!data) return NULL;
 
-  sstp_attr_hdr_len = sizeof(sstp_attribute_header_t);
-  attr = xmalloc(sizeof(sstp_attribute_t));
-  attr->length = sstp_attr_hdr_len + attr_data_len;
-  attr->data = xmalloc(attr->length);
+  attribute_length = sizeof(sstp_attribute_header_t) + data_length;
+  attribute = xmalloc(attribute_length);
   
-  attr_hdr.reserved = 0;
-  attr_hdr.attribute_id = attr_id;
-  attr_hdr.packet_length = htons(attr->length);
+  attribute_header.reserved = 0;
+  attribute_header.attribute_id = attribute_id;
+  attribute_header.packet_length = htons(attribute_length);
   
-  memcpy(attr->data, &attr_hdr, sstp_attr_hdr_len);
-  memcpy(attr->data + sstp_attr_hdr_len, attr_data, attr_data_len);
+  memcpy(attribute, &attribute_header, sizeof(sstp_attribute_header_t));
+  memcpy(attribute + sizeof(sstp_attribute_header_t), data, data_length);
   
-  return attr;
+  return attribute;
+}
+
+int crypto_set_certhash()
+{
+  int fd, i, j;
+  ssize_t rbytes;
+  char buf[1024];
+  unsigned char d[32];
+  
+  fd = open(cfg->ca_file, O_RDONLY);
+  if (fd == -1)
+    {
+      perror("crypto_set_certhash: open");
+      return -1;
+    } 
+
+  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
+    {
+      SHA_CTX c;
+      SHA1_Init(&c);
+      while ( (rbytes=read(fd, buf, 1024)) > 0)
+	SHA1_Update(&c, buf, rbytes);
+      SHA1_Final(d, &c);
+    }
+  else if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA256)
+    {
+      SHA256_CTX c;
+      SHA256_Init(&c);
+      while ( (rbytes=read(fd, buf, 1024)) > 0)
+	SHA256_Update(&c, buf, rbytes);
+      SHA256_Final(d, &c);
+    }
+  else 
+    {
+      /* cannot be here */
+      exit(1);
+    }
+
+  close(fd);
+  
+  for (i=0, j=0; j<256; i++, j += sizeof(uint32_t))
+    ctx->certhash[i] = *(uint32_t*)(d+j);
+
+  return 0;
 }
 
 
-void initialize_sstp()
-{
-  uint16_t attr_data;
-  int attr_len;
-  sstp_attribute_t* attribute;
-
-  /* setup sstp context */
-  ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
-  ctx->retry = 5;
-  ctx->state = CLIENT_CALL_DISCONNECTED;
-  ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
-  ctx->pppd_pid = -1;
-  
-  /* send SSTP_MSG_CALL_CONNECT_REQUEST message */
-  attribute = NULL;
-  attr_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
-  attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
-			       &attr_data, sizeof(uint16_t));  
-  send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, 
-			   attribute->data, 1, attribute->length);
-
-  free(attribute->data);
-  free(attribute);
-
-  /* set alarm and change state */
-  alarm(ctx->negociation_timer.tv_sec);
-  ctx->state = CLIENT_CONNECT_REQUEST_SENT;
-}
-
-
-int set_crypto_binding(void* data)
+int crypto_set_binding(void* data)
 {
   sstp_attribute_crypto_bind_req_t* req;
   uint8_t hash;
@@ -551,29 +643,43 @@ int set_crypto_binding(void* data)
 
   /* choose strongest algorithm */
   if (hash & CERT_HASH_PROTOCOL_SHA256)
-    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
-  else if (hash & CERT_HASH_PROTOCOL_SHA1)
-    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
-
-  
-  if (cfg->verbose)
-    xlog(LOG_INFO, "\t\t--> hash: %#x\n", hash);
-	  
-  if (cfg->verbose) xlog(LOG_INFO, "\t\t--> nonce: ");
-
-  for (i=0; i<4; i++)
     {
-      ctx->nonce[i] = ntohl(req->nonce[i]);
+      ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
       if (cfg->verbose)
-	xlog(LOG_INFO,"%#x %c",ctx->nonce[i],(i==3)?'\n':' ');
+	xlog(LOG_INFO, "\t\t--> hash algo: CERT_HASH_PROTOCOL_SHA256\n");
     }
+    
+  else if (hash & CERT_HASH_PROTOCOL_SHA1)
+    {
+      ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
+      if (cfg->verbose)
+	xlog(LOG_INFO, "\t\t--> hash algo: CERT_HASH_PROTOCOL_SHA1\n");
+    }
+  else 
+    {
+      xlog(LOG_ERROR, "Unimplemented protocol.\n");
+      return -1;
+    }
+    
+  if (cfg->verbose) xlog(LOG_INFO, "\t\t--> nonce: ");
+  for (i=0; i<8; i++)
+    {
+      ctx->nonce[i] = ntohl((uint32_t)req->nonce[i]);
+      if (cfg->verbose)
+	xlog(LOG_INFO,"%#x%c",ctx->nonce[i],(i==7)?'\n':' ');
+    }
+
+  /* compute ca file hash with chosen algorithm */
+  if (crypto_set_certhash() < 0)
+    return -1;
   
+  /* change client state */
   ctx->state = CLIENT_CONNECT_ACK_RECEIVED;
   return 0;
 }
 
 
-int get_status_info(void* data, uint16_t attr_len)
+int attribute_status_info(void* data, uint16_t attr_len)
 {
   sstp_attribute_status_info_t* info;
   uint8_t attrib_id;
@@ -608,29 +714,34 @@ int get_status_info(void* data, uint16_t attr_len)
 
 int sstp_fork() 
 {
-  /* this part comes from ssltunnel */
-  
   pid_t ppp_pid;
   int retcode, amaster, aslave, i;
   struct termios pty;
-  char pppd_path[] = "/usr/sbin/pppd";
+  char *pppd_path;
   char *pppd_args[128];
- 
+
+  
+  pppd_path = cfg->pppd_path;
+  
   i = 0;
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
-  pppd_args[i++] = "noauth";
-  pppd_args[i++] = "sync";
-  pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "nodefaultroute";
+  pppd_args[i++] = "9600"; 
+  pppd_args[i++] = "sync"; pppd_args[i++] = "refuse-eap";
+  
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
-  pppd_args[i++] = "logfile";   pppd_args[i++] = "/tmp/sstpclient_pppd_debug";
-  pppd_args[i++] = "lcp-max-configure"; pppd_args[i++] = "40"; pppd_args[i++] = "9600";
-  pppd_args[i++] = "debug";
-  pppd_args[i++] = "nodefaultroute";
+
+  if (cfg->logfile != NULL) 
+    {
+      pppd_args[i++] = "logfile";   pppd_args[i++] = cfg->logfile;
+      pppd_args[i++] = "debug";
+    }
+
   pppd_args[i++] = NULL;
-  
+
   memset(&pty, 0, sizeof(struct termios));
   pty.c_cc[VMIN] = 1;
   pty.c_cc[VTIME] = 0;
@@ -666,25 +777,20 @@ int sstp_fork()
 
       if (aslave > 2) close (aslave);
       if (amaster > 2) close (amaster);
-
-      if (cfg->verbose)
-	{
-	  xlog(LOG_INFO, "Preparing to fork %s with options:\n\t", pppd_path);
-	  for (i=0; i<128; i++)
-	    {
-	      if (pppd_args[i] == NULL) break;
-	      xlog(LOG_INFO, "%s ", pppd_args[i]);
-	    }
-	  xlog(LOG_INFO, "\n");
-	}
-      
-      if (execv (pppd_path , pppd_args))
+     
+      if (execv (pppd_path, pppd_args) == -1)
 	{
 	  xlog (LOG_ERROR, "execv failed: %s", strerror(errno));
-	  exit(1);
+	  return -1;
 	}
     }
-  
-  xlog (LOG_ERROR, "sstp_fork: you should never be here: %s", strerror(errno));
+
+  else 
+    {
+      xlog (LOG_ERROR, "sstp_fork: %s", strerror(errno));
+      return -1;
+    }
+
   return -1;
 }
+
