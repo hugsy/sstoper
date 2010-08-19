@@ -11,7 +11,9 @@
 #define SSTP_NEGOCIATION_TIMER 30
 #define SSTP_MAX_BUFFER_SIZE 1024
 
-#define SSTP_COMPOUND_MAC_KEY_SEED  "SSTP inner method derived CMK"
+#define SSTP_CMAC_SEED  "SSTP inner method derived CMK"
+#define SHA1_MAC_LEN 20
+#define SHA256_MAC_LEN 32
 
 
 /* SSTP Packet Type */
@@ -235,3 +237,8 @@ int crypto_set_certhash();
 int crypto_set_binding(void* data);
 int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
+
+/* exp */
+static void PRF(const uint8_t *key, size_t key_len,
+		const uint8_t *seed, size_t seed_len,
+		uint8_t *buf, size_t buf_len);

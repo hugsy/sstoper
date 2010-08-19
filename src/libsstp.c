@@ -704,8 +704,7 @@ int crypto_set_certhash()
 
 
 int crypto_set_cmac()
-{
-  
+{ 
   uint8_t hlak[32];
   uint8_t cmac[32];
     
@@ -714,9 +713,16 @@ int crypto_set_cmac()
    * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
    * 0x00.
    */
-  memset(hlak, 0, sizeof(uint32_t)*8);
-  /* cmac = PRF (hlak, SSTP_COMPOUND_MAC_KEY_SEED, 32); */
-  /* PRF(hlak, 32*sizeof(uint8_t), ) */
+  memset(hlak, 0, sizeof(uint8_t)*32);
+  memset(cmac, 0, sizeof(uint8_t)*32);
+
+  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
+    PRF(hlak, SHA1_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA1_MAC_LEN);
+  else
+    PRF(hlak, SHA256_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA256_MAC_LEN);
+
+  memcpy(ctx->cmac, cmac, 32 * sizeof(uint8_t));
+  
   return 0;
 }
 
@@ -844,91 +850,57 @@ int sstp_fork()
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /* experimental */
 /* from eap_peap_common.c */
 /* EAP-PEAP common routines */
 /* Copyright (c) 2008, Jouni Malinen <j@w1.fi> */
-#define SHA1_MAC_LEN 20
 
-void PRF(const uint8_t *key, size_t key_len, const char *label, const uint8_t *seed, size_t seed_len,
-	 uint8_t *buf, size_t buf_len)
+static void PRF(const uint8_t *key, size_t key_len,
+		const uint8_t *seed, size_t seed_len,
+		uint8_t *buf, size_t buf_len)
 {
   unsigned char counter = 0;
   size_t pos, plen;
-  uint8_t hash[SHA1_MAC_LEN];
-  size_t label_len = strlen(label);
+  uint8_t hash[key_len];
   uint8_t extra[2];
-  const unsigned char *addr[5];
-  size_t len[5];
+  const unsigned char *addr[4];
+  int len[4];
+  const EVP_MD* (*HASH)();
+  
+  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
+    HASH = &EVP_sha1;
+  else
+    HASH = &EVP_sha256;
   
   addr[0] = hash;
-  len[0] = 0;
-  addr[1] = (unsigned char *) label;
-  len[1] = label_len;
-  addr[2] = seed;
-  len[2] = seed_len;
-
+  addr[1] = seed;
+  addr[2] = extra;
+  addr[3] = &counter;
   
-  /*
-   * PRF (K,S,LEN) = T1 | T2 | T3 | T4 | ... where:
-   * T1 = HMAC-SHA1(K, S | LEN | 0x01)
-   * T2 = HMAC-SHA1 (K, T1 | S | LEN | 0x02)
-   * T3 = HMAC-SHA1 (K, T2 | S | LEN | 0x03)
-   * T4 = HMAC-SHA1 (K, T3 | S | LEN | 0x04)
-   * ...
-   */
-	
   extra[0] = buf_len & 0xff;
-  addr[3] = extra;
-  len[3] = 1;
-  addr[4] = &counter;
-  len[4] = 1;
-
-  pos = 0;
+    
+  len[0] = 0;
+  len[1] = seed_len;
+  len[2] = 1;
+  len[3] = 1;  
   
+  pos = 0;
   while (pos < buf_len)
     {
       counter++;
       plen = buf_len - pos;
+      HMAC(HASH(), key, key_len, *addr, 4, hash, len);
       
-      /* int hmac_sha1_vector(const u8 *key=key, size_t key_len=key_len, size_t num_elem=5, */
-                     /* const u8 *addr[]=addr, const size_t *len=len, u8 *mac=hash); */
-      
-      /* unsigned char *HMAC(const EVP_MD *evp_md, const void *key, */
-                      /* int key_len, const unsigned char *d, int n, */
-                      /* unsigned char *md, unsigned int *md_len); */
-
-      /* HMAC(EVP_sha1(), key, key_len, addr, 5, hash, SHA1_MAC_LEN); */
-      
-      if (plen >= SHA1_MAC_LEN)
+      if (plen >= key_len)
 	{
-	  memcpy(&buf[pos], hash, SHA1_MAC_LEN);
-	  pos += SHA1_MAC_LEN;
+	  memcpy(&buf[pos], hash, key_len);
+	  pos += key_len;
 	}
       else
 	{
 	  memcpy(&buf[pos], hash, plen);
 	  break;
 	}
-      len[0] = SHA1_MAC_LEN;
+      len[0] = key_len;
     }
 }
