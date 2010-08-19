@@ -295,9 +295,9 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       /* parsing control header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (%#x)\n", control_messages_types_str[control_type],
+	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n", control_messages_types_str[control_type],
 	       control_type);
-	  xlog(LOG_INFO, "\t-> num_attr:%x\n", control_num_attributes);
+	  xlog(LOG_INFO, "\t-> num_attr:%.2x\n", control_num_attributes);
 	}
       
       switch (control_type)
@@ -441,8 +441,8 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
       /* parsing attribute header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t\t--> attribute_id:%s (%#x)\n",attr_types_str[attribute_id], attribute_id);
-	  xlog(LOG_INFO, "\t\t--> len:%d\n", attribute_length);
+	  xlog(LOG_INFO, "\t\t--> attribute_id:%s (%#.2x)\n",attr_types_str[attribute_id], attribute_id);
+	  xlog(LOG_INFO, "\t\t--> len: %d bytes\n", attribute_length);
 	}
 
       switch (attribute_id)
@@ -614,15 +614,15 @@ int crypto_set_binding(void* data)
   /* setting crypto properties */
   req = (sstp_attribute_crypto_bind_req_t*) data;
   hash = req->hash_bitmask;
-
-  if ( !(hash & CERT_HASH_PROTOCOL_SHA1) && !(hash & CERT_HASH_PROTOCOL_SHA256))
+  
+  if ( hash!=CERT_HASH_PROTOCOL_SHA1 && hash!=CERT_HASH_PROTOCOL_SHA256)
     {
       xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", hash);
       return -1;
     }
 
   /* choose strongest algorithm */
-  if (hash & CERT_HASH_PROTOCOL_SHA256)
+  if (hash == CERT_HASH_PROTOCOL_SHA256)
     ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
   else /* if (hash & CERT_HASH_PROTOCOL_SHA1) */
     ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
@@ -631,9 +631,10 @@ int crypto_set_binding(void* data)
   
   if (cfg->verbose)
     {
-      xlog(LOG_INFO, "\t\t--> hash algo: %s\n", crypto_req_attrs_str[hash]);
+      xlog(LOG_INFO, "\t\t--> hash algo: %s (%#.2x)\n", crypto_req_attrs_str[ctx->hash_algorithm],
+	   ctx->hash_algorithm);
       xlog(LOG_INFO, "\t\t--> nonce: 0x");
-      for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);      
+      for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);
       xlog(LOG_INFO, "\n");
     }
   
@@ -753,8 +754,8 @@ int attribute_status_info(void* data, uint16_t attr_len)
     }
 
   /* show attribute */
-  xlog(LOG_INFO, "\t\t--> attribute ref: %s (%#x)\n", attr_types_str[attribute_id], attribute_id);
-  xlog(LOG_INFO, "\t\t--> status: %s (%#x)\n", attrib_status_str[status], status);
+  xlog(LOG_INFO, "\t\t--> attribute ref: %s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
+  xlog(LOG_INFO, "\t\t--> status: %s (%#.2x)\n", attrib_status_str[status], status);
 
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT) return 0;
   

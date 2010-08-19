@@ -83,9 +83,9 @@ enum crypto_req_attrs
     CERT_HASH_PROTOCOL_SHA1 = 0x01,
     CERT_HASH_PROTOCOL_SHA256 = 0x02
   };
-
 static char* crypto_req_attrs_str[]=
   {
+    "",
     "CERT_HASH_PROTOCOL_SHA1",
     "CERT_HASH_PROTOCOL_SHA256"
   };
