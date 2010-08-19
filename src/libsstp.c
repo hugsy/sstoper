@@ -170,6 +170,7 @@ void sstp_loop()
   ctx->retry = 5;
   ctx->state = CLIENT_CALL_DISCONNECTED;
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
+  ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->pppd_pid = -1;
 
   read_max_size = gnutls_record_get_max_size(tls);
@@ -316,11 +317,12 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  break;
 	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
-	  xlog(LOG_ERROR, "Server refused connection\n");
+	  if ( ctx->state==CLIENT_CONNECT_REQUEST_SENT ) return -1;
+	  
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
-	  if ( ctx->state==CLIENT_CONNECT_REQUEST_SENT && ctx->retry )
+	  if ( ctx->retry ) 
 	    {
 	      if (cfg->verbose) xlog(LOG_INFO, "Retrying ... (%d/%d)\n",
 				     5-ctx->retry, 5);
@@ -344,7 +346,16 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT_ACK, NULL, 0, 0);
 	  ctx->state = CLIENT_CALL_DISCONNECTED;
 	  break;
+
+	case SSTP_MSG_ECHO_REQUEST:
+	  /* a implementer */
+	  break;
 	  
+	case SSTP_MSG_ECHO_RESPONSE:
+	  if (ctx->state != CLIENT_CALL_CONNECTED) return -1;
+	  alarm(0);
+
+	  break;
 	  
 	  /*
 	   * Client SHOULD NEVER receive teh following message.
@@ -364,7 +375,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       void* data_ptr;
       data_ptr = rbuffer + sizeof(sstp_header_t);
       
-      /* if PPP-CHAP is successful, send SSTP_MSG_CALL_CONNECTED */
+      /* if PPP-CHAP is successful*/
       if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 &&
 	   (*(uint8_t*)(data_ptr + 2)) == 0x03 )
 	{
@@ -374,7 +385,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  sstp_attribute_crypto_bind_t crypto_settings;
 
 	  memset(&crypto_settings, 0, sizeof(sstp_attribute_crypto_bind_t));
-	  
+
+	  /* send SSTP_MSG_CALL_CONNECTED */
 	  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
 	  crypto_settings.hash_bitmask = ctx->hash_algorithm;
 	  memcpy(crypto_settings.nonce, ctx->nonce, sizeof(uint32_t)*8);
@@ -387,6 +399,14 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
 
 	  free(attribute);
+
+	  /* and set hello timer */
+	  alarm(ctx->hello_timer.tv_sec);
+	  ctx->state = CLIENT_CALL_CONNECTED;
+	  
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "Client is now %s (%#x)\n", client_status_str[ctx->state], ctx->state);
+
 	}
 
       retcode = write(1, data_ptr, sstp_length);
