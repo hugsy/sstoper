@@ -129,20 +129,22 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 }
 
 
-void check_arg(char** argument, char* default_value) 
+void check_required_arg(char* argument)
+{
+  if (argument == NULL)
+    {
+      xlog(LOG_ERROR, "Missing required argument.\n\n");
+      usage("sstpclient", EXIT_FAILURE);
+    }
+}
+
+
+void check_default_arg(char** argument, char* default_value)
 {
   if ((*argument) == NULL)
     {
-      if (default_value == NULL) 
-	{
-	  xlog(LOG_ERROR, "Missing required argument.\n\n");
-	  usage("sstpclient", EXIT_FAILURE);
-	}
-      else 
-	{
-	  xlog(LOG_ERROR, "Using default value: %s\n", default_value);
-	  *argument = default_value;
-	}
+      xlog(LOG_ERROR, "Using default value: %s.\n", default_value);
+      *argument = default_value;
     }
 }
 
@@ -201,17 +203,13 @@ int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
 {
   int retcode;
   const char* err;
-  /* gnutls_session_t* tls; */
   gnutls_certificate_credentials_t creds;
 
-  /* init and allocate */
-  /* tls = (gnutls_session_t*) xmalloc(sizeof(gnutls_session_t)); */
+  /* initialize and allocate */
   gnutls_global_init();
   gnutls_init(tls_session, GNUTLS_CLIENT);
 
-  /* exp. */
   retcode = gnutls_record_set_max_size(*tls_session, SSTP_MAX_BUFFER_SIZE);
-  
   if (retcode != GNUTLS_E_SUCCESS)
     {
       gnutls_perror(retcode);
@@ -219,8 +217,7 @@ int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
     }
   
   /* setup x509 */
-  retcode = gnutls_priority_set_direct (*tls_session, "SECURE256", &err);
-  
+  retcode = gnutls_priority_set_direct (*tls_session, "SECURE256", &err);  
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
@@ -308,7 +305,7 @@ void sighandle(int signum)
   switch(signum) 
     {
     case SIGALRM:
-      xlog(LOG_INFO, "Nego timer ends\n");
+      xlog(LOG_INFO, "Negociation timer ends\n");
       break;
       
     case SIGINT:
@@ -354,18 +351,17 @@ int main (int argc, char* argv[])
 
   /* configuration parsing and privilege check */
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
-  cfg->server = NULL;
-  cfg->verbose = 0;
     
   parse_options(cfg, argc, argv);
-  check_arg(&cfg->server, NULL);
-  check_arg(&cfg->port, "443");
-  check_arg(&cfg->ca_file, NULL);
-  check_arg(&cfg->username, NULL);
-  check_arg(&cfg->password, NULL);
-  check_arg(&cfg->logfile, NULL);
-  check_arg(&cfg->pppd_path, "/usr/sbin/pppd");
   
+  check_required_arg(cfg->server);
+  check_required_arg(cfg->ca_file);
+  check_required_arg(cfg->username);
+  check_required_arg(cfg->password);
+
+  check_default_arg(&cfg->port, "443");
+  check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
+
   
   /* create socket  */
   sockfd = init_tcp(cfg->server, cfg->port); 
@@ -381,22 +377,21 @@ int main (int argc, char* argv[])
       return EXIT_FAILURE;
     }
 
+  
   /* http over ssl nego */
   if (cfg->verbose) xlog(LOG_INFO, "Performing HTTPS transaction\n");
-  retcode = https_session_negociation();
-  
+  retcode = https_session_negociation();  
   if (retcode < 0) 
-    {
-      goto end;
-    }
+    goto end;
 
 
   /* starting sstp */
   if (cfg->verbose) xlog(LOG_INFO, "Initiating SSTP negociation\n");
   sstp_loop();
 
- end:
+  
   /* end gnutls session and free allocated memory */
+ end:  
   if (cfg->verbose) xlog(LOG_INFO, "SSTP dialog end\n");
   end_tls_session(EXIT_SUCCESS);
   

@@ -18,6 +18,11 @@
 #include "sstpclient.h"
 
 
+/* #include <pppd/chap_ms.h> */
+/* extern unsigned char* mppe_send_key; */
+/* extern unsigned char* mppe_recv_key; */
+
+
 void generate_guid(char data[])
 {
   uint32_t data1, data4;
@@ -39,14 +44,33 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
 {
   sstp_header_t* header = (sstp_header_t*) recv_buf;
   
-  return (header->version == SSTP_VERSION) \
-    && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET);
+  if (header->version != SSTP_VERSION)
+    {
+      if (cfg->verbose)
+	xlog(LOG_ERROR, "Invalid version (%#x)", header->version);
+      return 0;
+    }
+
+  if (header->reserved!=SSTP_DATA_PACKET && header->reserved!=SSTP_CONTROL_PACKET)
+    {
+      if (cfg->verbose)
+	xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
+      return 0;
+    }
+
   /*
-   * fixme - anomalie sstp
+   * bug sstp ou ppp (fixme)
    * le 1er packet ppp recu du serveur possede une taille de paquet differente de celle
    * annonce dans le header sstp -> test de la taille echoue 
    */
-  /* && ntohs(header->length)==recv_len; */
+  if (ntohs(header->length) != recv_len)
+    {
+      if (cfg->verbose)
+	xlog(LOG_ERROR, "Unmatching length: %#x!=%#x\n", header->version, recv_len);
+      return 0;
+    }
+
+  return 1;
 }
 
 
@@ -151,9 +175,6 @@ void sstp_loop()
   ctx->state = CLIENT_CALL_DISCONNECTED;
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->pppd_pid = -1;
-  for (i=0; i<8; i++) ctx->nonce[i] = 0x0a0a0a0a;
-  for (i=0; i<8; i++) ctx->cmac[i]  = 0x0b0b0b0b;
-  for (i=0; i<8; i++) ctx->cmac[i]  = 0x0c0c0c0c;
 
   read_max_size = gnutls_record_get_max_size(tls);
   
@@ -228,8 +249,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
  
   if (!is_valid_header(rbuffer, sstp_length))
     {
-      xlog(LOG_ERROR, "SSTP packet has invalid header\n");
-      xlog(LOG_ERROR, "Dropping this packet\n" );
+      xlog(LOG_ERROR, "SSTP packet has invalid header. Dropped\n");
       return 0;
     }
     
@@ -238,7 +258,9 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
   is_control = is_control_packet(sstp_header);
   
   if (cfg->verbose)
-    xlog(LOG_INFO, "\t-> %s packet\n", is_control ? "Control" : "Data");
+    xlog(LOG_INFO, "\t-> %s packet (%lu)\n",
+	 is_control ? "Control" : "Data",
+	 ntohs(sstp_header->length));
 
   sstp_length -= sizeof(sstp_header_t);
   if (sstp_length <= 0)
@@ -343,28 +365,28 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
     }
   else 
     {
-      int i;
-      size_t attribute_len;
       void* data_ptr;
-      void* attribute;
-      sstp_attribute_crypto_bind_t crypto_settings;
-      
       data_ptr = rbuffer + sizeof(sstp_header_t);
       
       /* if PPP-CHAP is successful, send SSTP_MSG_CALL_CONNECTED */
       if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 &&
 	   (*(uint8_t*)(data_ptr + 2)) == 0x03 )
 	{
-	  crypto_settings.hash_bitmask = ctx->hash_algorithm;
-	  for (i=0; i<8; i++) crypto_settings.nonce[i] = htonl(ctx->nonce[i]);
-	  for (i=0; i<8; i++) crypto_settings.certhash[i] = htonl(ctx->certhash[i]);
-	  for (i=0; i<8; i++) crypto_settings.cmac[i] = htonl(ctx->cmac[i]);
-	  
-	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, (void*)&crypto_settings,
-				       sizeof(sstp_attribute_crypto_bind_t));
+	  int i;
+	  size_t attribute_len;
+	  void* attribute;
+	  sstp_attribute_crypto_bind_t crypto_settings;
+
 	  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
+	  crypto_settings.hash_bitmask = ctx->hash_algorithm;
+	  memcpy(crypto_settings.nonce, ctx->nonce, sizeof(uint32_t)*8);
+	  memcpy(crypto_settings.certhash, ctx->certhash, sizeof(uint32_t)*8);
+	  memcpy(crypto_settings.cmac, ctx->cmac, sizeof(uint32_t)*8);
 	  
-	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, &attribute, 1,attribute_len);
+	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, &crypto_settings,
+				       sizeof(sstp_attribute_crypto_bind_t));
+	  
+	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
 
 	  free(attribute);
 	}
@@ -417,7 +439,6 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 	  xlog(LOG_ERROR, "Incorrect attribute id.\n");
 	  return -1;
 	}
-      	  sleep(5);
       
       /* parsing attribute header */
       if (cfg->verbose)
@@ -428,8 +449,7 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 
       switch (attribute_id)
 	{
-	case SSTP_ATTRIB_NO_ERROR:
-	  break;
+	case SSTP_ATTRIB_NO_ERROR: break;
 
 	case SSTP_ATTRIB_STATUS_INFO:
 	  retcode = attribute_status_info(attribute_data, attribute_length);
@@ -570,9 +590,72 @@ void* create_attribute(uint8_t attribute_id, void* data, size_t data_length)
   return attribute;
 }
 
+
+int crypto_set_binding(void* data)
+{
+  sstp_attribute_crypto_bind_req_t* req;
+  uint8_t hash;
+  int i;
+
+  /* disable negociation timer */
+  alarm(0);
+  
+  /* check state */
+  if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
+    {
+      xlog(LOG_ERROR, "Incorrect message for this state\n");
+      if (cfg->verbose) 
+	{
+	  xlog(LOG_ERROR, "Current state: %#x. Expected %#x\n",
+	       ctx->state, CLIENT_CONNECT_REQUEST_SENT);
+	}
+      
+      return -1;
+    }
+  
+  /* setting crypto properties */
+  req = (sstp_attribute_crypto_bind_req_t*) data;
+  hash = req->hash_bitmask;
+
+  if ( !(hash & CERT_HASH_PROTOCOL_SHA1) && !(hash & CERT_HASH_PROTOCOL_SHA256))
+    {
+      xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", hash);
+      return -1;
+    }
+
+  /* choose strongest algorithm */
+  if (hash & CERT_HASH_PROTOCOL_SHA256)
+    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
+  else /* if (hash & CERT_HASH_PROTOCOL_SHA1) */
+    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
+
+  memcpy(ctx->nonce, req->nonce, sizeof(uint32_t)*8);
+  
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "\t\t--> hash algo: %s\n", crypto_req_attrs_str[hash]);
+      xlog(LOG_INFO, "\t\t--> nonce: 0x");
+      for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);
+      xlog(LOG_INFO, "\n");
+    }
+  
+  /* compute ca file hash with chosen algorithm */
+  if (crypto_set_certhash() < 0)
+    return -1;
+
+  /* compute compound mac according to spec */
+  if (crypto_set_cmac() < 0)
+    return -1;
+  
+  /* change client state */
+  ctx->state = CLIENT_CONNECT_ACK_RECEIVED;
+  return 0;
+}
+
+
 int crypto_set_certhash()
 {
-  int fd, i, j, val;
+  int fd, i, val;
   ssize_t rbytes;
   char buf[1024];
   unsigned char dst[32];
@@ -612,7 +695,7 @@ int crypto_set_certhash()
   
   if (cfg->verbose)
     {
-      xlog(LOG_INFO, "\t\t--> CA hash: ");
+      xlog(LOG_INFO, "\t\t--> CA hash: 0x");
       for(i=0;i<8;i++)
 	xlog(LOG_INFO, "%x", ctx->certhash[i]);
       xlog(LOG_INFO, "\n");
@@ -622,68 +705,15 @@ int crypto_set_certhash()
 }
 
 
-int crypto_set_binding(void* data)
+int crypto_set_cmac()
 {
-  sstp_attribute_crypto_bind_req_t* req;
-  uint8_t hash;
-  int i;
-
-  /* disable negociation timer */
-  alarm(0);
+  uint32_t cmac[8];
+  char test[33];
+  memset(test, 0, 33);
   
-  /* check state */
-  if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
-    {
-      xlog(LOG_ERROR, "Incorrect message for this state\n");
-      if (cfg->verbose) 
-	{
-	  xlog(LOG_ERROR, "Current state: %#x. Expected %#x\n",
-	       ctx->state, CLIENT_CONNECT_REQUEST_SENT);
-	}
-      
-      return -1;
-    }
-  
-  /* setting crypto properties */
-  req = (sstp_attribute_crypto_bind_req_t*) data;
-  hash = req->hash_bitmask;
-
-  if ( !(hash & CERT_HASH_PROTOCOL_SHA1) && !(hash & CERT_HASH_PROTOCOL_SHA256))
-    {
-      xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", hash);
-      return -1;
-    }
-
-  /* choose strongest algorithm */
-  if (hash & CERT_HASH_PROTOCOL_SHA256)
-    {
-      ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
-      if (cfg->verbose)
-	xlog(LOG_INFO, "\t\t--> hash algo: CERT_HASH_PROTOCOL_SHA256\n");
-    }
-    
-  else /* if (hash & CERT_HASH_PROTOCOL_SHA1) */
-    {
-      ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
-      if (cfg->verbose)
-	xlog(LOG_INFO, "\t\t--> hash algo: CERT_HASH_PROTOCOL_SHA1\n");
-    }
-    
-  if (cfg->verbose) xlog(LOG_INFO, "\t\t--> nonce: 0x");
-  for (i=0; i<8; i++)
-    {
-      ctx->nonce[i] = ntohl((uint32_t)req->nonce[i]);
-      if (cfg->verbose)
-	xlog(LOG_INFO,"%x",ctx->nonce[i]);
-    }
-  if (cfg->verbose) xlog(LOG_INFO, "\n");
-  
-  /* compute ca file hash with chosen algorithm */
-  if (crypto_set_certhash() < 0)
-    return -1;
-  
-  /* change client state */
-  ctx->state = CLIENT_CONNECT_ACK_RECEIVED;
+  /* snprintf(test, 33, "%s%s", mppe_send_key, mppe_recv_key); */
+  /* xlog(LOG_INFO, "%s", test); */
+  /* return -1; */
   return 0;
 }
 
@@ -691,17 +721,24 @@ int crypto_set_binding(void* data)
 int attribute_status_info(void* data, uint16_t attr_len)
 {
   sstp_attribute_status_info_t* info;
-  uint8_t attrib_id;
+  uint8_t attribute_id;
   uint32_t status;
   int rbytes;
 
   info = (sstp_attribute_status_info_t*) data;
-  attrib_id = ntohl(info->attrib_id);
+  attribute_id = info->attrib_id;
   status = ntohl(info->status);
 
+  /* check attribute */
+  if (attribute_id > ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG)
+    {
+      xlog(LOG_ERROR, "Attribute id is not valid.\n");
+      return -1;
+    }
+
   /* show attribute */
-  xlog(LOG_INFO, "\t\t--> attribute id: %#x\n", attrib_id);
-  xlog(LOG_INFO, "\t\t--> status: %#x\n", status);
+  xlog(LOG_INFO, "\t\t--> attribute id: %#x\n", attribute_id);
+  xlog(LOG_INFO, "\t\t--> status: %s (%#x)\n", attrib_status_str[status], status);
 
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
     return 0;
@@ -737,11 +774,11 @@ int sstp_fork()
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "nodefaultroute";
-  pppd_args[i++] = "noauth";
   pppd_args[i++] = "9600"; 
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
-  
+  pppd_args[i++] = "require-mppe";
+    
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
 
@@ -752,17 +789,6 @@ int sstp_fork()
     }
 
   pppd_args[i++] = NULL;
-
-  if (cfg->verbose)
-    {
-      xlog(LOG_INFO, "%s ", pppd_path);
-      for (i=0;;i++) 
-	{
-	  if (!pppd_args[i]) break;
-	  xlog(LOG_INFO, "%s ", pppd_args[i]);
-	}
-      xlog(LOG_INFO, "\n ");
-    }
 
   memset(&pty, 0, sizeof(struct termios));
   pty.c_cc[VMIN] = 1;
@@ -813,4 +839,3 @@ int sstp_fork()
       return -1;
     }
 }
-

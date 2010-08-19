@@ -11,6 +11,8 @@
 #define SSTP_NEGOCIATION_TIMER 30
 #define SSTP_MAX_BUFFER_SIZE 1024
 
+#define SSTP_COMPOUND_MAC_KEY_SEED  "SSTP inner method derived CMK"
+
 
 /* SSTP Packet Type */
 enum packet_types 
@@ -168,7 +170,6 @@ typedef struct __sstp_attribute
 } sstp_attribute_t;
 
 /* uint24_t n'existe pas */
-/* uint24_t reserved1; */
 typedef struct _uint24_t
 {
   uint8_t byte[3];
@@ -177,15 +178,9 @@ typedef struct _uint24_t
 typedef struct __sstp_attribute_crypto_bind_req
 {
   uint24_t reserved1;
-  uint8_t hash_bitmask; /* 0-er les 3 octets de poids fort */
+  uint8_t hash_bitmask;
   uint32_t nonce[8];
 } sstp_attribute_crypto_bind_req_t;
-
-typedef struct __sstp_attribute_status_info
-{
-  uint32_t attrib_id; /* 0-er les 3 octets de poids fort */
-  uint32_t status;
-} sstp_attribute_status_info_t;
 
 typedef struct __sstp_attribute_crypto_bind
 {
@@ -195,6 +190,14 @@ typedef struct __sstp_attribute_crypto_bind
   uint32_t certhash[8];
   uint32_t cmac[8];
 } sstp_attribute_crypto_bind_t;
+
+
+typedef struct __sstp_attribute_status_info
+{
+  uint24_t reserved1;
+  uint8_t attrib_id;
+  uint32_t status;
+} sstp_attribute_status_info_t;
 
 
 /* sstp client context */
