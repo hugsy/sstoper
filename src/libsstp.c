@@ -114,19 +114,15 @@ void initialize_sstp()
   uint16_t attribute_data;
   void* attribute;
   size_t attribute_len;
-  sstp_attribute_header_t* t;
   
   /* send SSTP_MSG_CALL_CONNECT_REQUEST message */
   attribute_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
   attribute_len = sizeof(sstp_attribute_header_t) + sizeof(uint16_t);
   attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
 			       (void*)&attribute_data, sizeof(uint16_t));
-  t = (sstp_attribute_header_t*) attribute;
-  xlog(LOG_INFO, "attribute len %lu \n", ntohs(t->packet_length));
+
   send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, attribute,
 			   1, attribute_len);
-  /* send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, NULL, */
-			   /* 0, 0); */
 
   free(attribute);
 
@@ -156,8 +152,8 @@ void sstp_loop()
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->pppd_pid = -1;
   for (i=0; i<8; i++) ctx->nonce[i] = 0x0a0a0a0a;
-  for (i=0; i<8; i++) ctx->cmac[i] = 0x0b0b0b0b;
-  for (i=0; i<8; i++) ctx->cmac[i] = 0x0c0c0c0c;
+  for (i=0; i<8; i++) ctx->cmac[i]  = 0x0b0b0b0b;
+  for (i=0; i<8; i++) ctx->cmac[i]  = 0x0c0c0c0c;
 
   read_max_size = gnutls_record_get_max_size(tls);
   
@@ -211,9 +207,7 @@ void sstp_loop()
 	  
 	  else 
 	    {
-	      if (cfg->verbose)
-		xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
-
+	      xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
 	      retcode = sstp_decode(rbuffer, rbytes);
 	    }
 	  
@@ -296,6 +290,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 
 	  retcode = sstp_fork();
 	  if (retcode < 0) return -1;
+	  
 	  ctx->pppd_pid = retcode;
 	  if (cfg->verbose)
 	    xlog (LOG_INFO, "pppd forked as %d\n", ctx->pppd_pid);
@@ -577,7 +572,7 @@ void* create_attribute(uint8_t attribute_id, void* data, size_t data_length)
 
 int crypto_set_certhash()
 {
-  int fd, i, j;
+  int fd, i, j, val;
   ssize_t rbytes;
   char buf[1024];
   unsigned char dst[32];
@@ -589,33 +584,40 @@ int crypto_set_certhash()
       return -1;
     } 
 
-  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
-    {
-      SHA_CTX sha_ctx;
-      SHA1_Init(&sha_ctx);
-      while ( (rbytes=read(fd, buf, 1024)) > 0)
-	SHA1_Update(&sha_ctx, buf, rbytes);
-      SHA1_Final(dst, &sha_ctx);
-    }
-  else if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA256)
+  
+  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA256)
     {
       SHA256_CTX sha_ctx;
+      val = 256/8;
+      
       SHA256_Init(&sha_ctx);
       while ( (rbytes=read(fd, buf, 1024)) > 0)
 	SHA256_Update(&sha_ctx, buf, rbytes);
       SHA256_Final(dst, &sha_ctx);
     }
-
-  else 
+  else /* if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA) */
     {
-      exit(1);
+      SHA_CTX sha_ctx;
+      val = 160/8;
+      
+      SHA1_Init(&sha_ctx);
+      while ( (rbytes=read(fd, buf, 1024)) > 0)
+	SHA1_Update(&sha_ctx, buf, rbytes);
+      SHA1_Final(dst, &sha_ctx);
+    }
+
+  close(fd);
+
+  memcpy(ctx->certhash, dst, val);
+  
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "\t\t--> CA hash: ");
+      for(i=0;i<8;i++)
+	xlog(LOG_INFO, "%x", ctx->certhash[i]);
+      xlog(LOG_INFO, "\n");
     }
   
-  close(fd);
-  
-  for (i=0, j=0; j<256; i++, j += sizeof(uint32_t))
-    ctx->certhash[i] = *(uint32_t*)(dst+j);
-
   return 0;
 }
 
@@ -660,26 +662,22 @@ int crypto_set_binding(void* data)
 	xlog(LOG_INFO, "\t\t--> hash algo: CERT_HASH_PROTOCOL_SHA256\n");
     }
     
-  else if (hash & CERT_HASH_PROTOCOL_SHA1)
+  else /* if (hash & CERT_HASH_PROTOCOL_SHA1) */
     {
       ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
       if (cfg->verbose)
 	xlog(LOG_INFO, "\t\t--> hash algo: CERT_HASH_PROTOCOL_SHA1\n");
     }
-  else 
-    {
-      xlog(LOG_ERROR, "Unimplemented protocol.\n");
-      return -1;
-    }
     
-  if (cfg->verbose) xlog(LOG_INFO, "\t\t--> nonce: ");
+  if (cfg->verbose) xlog(LOG_INFO, "\t\t--> nonce: 0x");
   for (i=0; i<8; i++)
     {
       ctx->nonce[i] = ntohl((uint32_t)req->nonce[i]);
       if (cfg->verbose)
-	xlog(LOG_INFO,"%#x%c",ctx->nonce[i],(i==7)?'\n':' ');
+	xlog(LOG_INFO,"%x",ctx->nonce[i]);
     }
-
+  if (cfg->verbose) xlog(LOG_INFO, "\n");
+  
   /* compute ca file hash with chosen algorithm */
   if (crypto_set_certhash() < 0)
     return -1;
@@ -739,8 +737,10 @@ int sstp_fork()
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "nodefaultroute";
+  pppd_args[i++] = "noauth";
   pppd_args[i++] = "9600"; 
-  pppd_args[i++] = "sync"; pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "sync";
+  pppd_args[i++] = "refuse-eap";
   
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
@@ -752,6 +752,17 @@ int sstp_fork()
     }
 
   pppd_args[i++] = NULL;
+
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "%s ", pppd_path);
+      for (i=0;;i++) 
+	{
+	  if (!pppd_args[i]) break;
+	  xlog(LOG_INFO, "%s ", pppd_args[i]);
+	}
+      xlog(LOG_INFO, "\n ");
+    }
 
   memset(&pty, 0, sizeof(struct termios));
   pty.c_cc[VMIN] = 1;
@@ -801,6 +812,5 @@ int sstp_fork()
       xlog (LOG_ERROR, "sstp_fork: %s", strerror(errno));
       return -1;
     }
-
 }
 
