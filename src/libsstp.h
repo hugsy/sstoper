@@ -8,7 +8,7 @@
 #define SSTP_VERSION 0x10
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
-#define SSTP_NEGOCIATION_TIMER 5
+#define SSTP_NEGOCIATION_TIMER 30
 #define SSTP_MAX_BUFFER_SIZE 1024
 
 
@@ -169,17 +169,16 @@ typedef struct __sstp_attribute
 
 /* uint24_t n'existe pas */
 /* uint24_t reserved1; */
-#ifndef uint24_t
 typedef struct _uint24_t
 {
   uint8_t byte[3];
 } uint24_t;
-#endif
 
 typedef struct __sstp_attribute_crypto_bind_req
 {
-  uint32_t hash_bitmask; /* 0-er les 3 octets de poids fort */
-  uint32_t nonce[4];
+  uint24_t reserved1;
+  uint8_t hash_bitmask; /* 0-er les 3 octets de poids fort */
+  uint32_t nonce[8];
 } sstp_attribute_crypto_bind_req_t;
 
 typedef struct __sstp_attribute_status_info
@@ -190,7 +189,8 @@ typedef struct __sstp_attribute_status_info
 
 typedef struct __sstp_attribute_crypto_bind
 {
-  uint32_t hash_bitmask; /* 0-er les 3 octets de poids fort */
+  uint24_t reserved1;
+  uint8_t hash_bitmask;
   uint32_t nonce[8];
   uint32_t certhash[8];
   uint32_t cmac[8];
@@ -213,25 +213,22 @@ typedef struct __sstp_context
 
 static sstp_context_t* ctx;
 
-
 /* functions declarations  */
+void generate_guid(char data[]);
+int is_valid_header(void* recv_buf, ssize_t recv_len);
+int is_control_packet(sstp_header_t* packet_header);
 int https_session_negociation();
-
 void initialize_sstp();
 void sstp_loop();
-void sstp_send(void*, size_t);
-void send_sstp_packet(uint8_t, void*, size_t);
-void send_sstp_data_packet(void*, size_t);
-void send_sstp_control_packet(uint16_t, void*, uint16_t, size_t);
-
-void* create_attribute(uint8_t, void*, size_t);
-
-int sstp_decode(void*, ssize_t);
-int sstp_decode_attributes(uint16_t, void*, ssize_t);
-
-int is_valid_header(void*, ssize_t);
-int is_control_packet(sstp_header_t*);
-
+int sstp_decode(void* rbuffer, ssize_t sstp_length);
+int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read); 
+void sstp_send(void* data, size_t data_length);
+void send_sstp_packet(uint8_t type, void* data, size_t data_length);
+void send_sstp_data_packet(void* data, size_t len); 
+void send_sstp_control_packet(uint16_t msg_type, void* attribute,
+                              uint16_t attribute_number, size_t attribute_len);
+void* create_attribute(uint8_t attribute_id, void* data, size_t data_length);
 int crypto_set_certhash();
-int crypto_set_binding(void*);
-int attribute_status_info(void*,uint16_t);
+int crypto_set_binding(void* data);
+int attribute_status_info(void* data, uint16_t attr_len);
+int sstp_fork(); 

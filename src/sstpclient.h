@@ -33,16 +33,17 @@ typedef struct
   char* pppd_path;
 } sstp_config;
 
-
-gnutls_session_t* tls;
+gnutls_session_t tls;
 sock_t sockfd;
 sstp_config *cfg;
 
 
-/* functions declaration */
-void* xmalloc(size_t);
-void xlog(int, const char*, ...);
-void end_tls_session(int);
-
 /* compat ansi */
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
+
+
+/* functions declaration */
+void xlog(int type, const char* fmt, ...); 
+void* xmalloc(size_t size);
+void end_tls_session(int reason);
+
