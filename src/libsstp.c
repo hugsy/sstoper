@@ -13,14 +13,10 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <openssl/sha.h>
+#include <openssl/hmac.h>
 
 #include "libsstp.h"
 #include "sstpclient.h"
-
-
-/* #include <pppd/chap_ms.h> */
-/* extern unsigned char* mppe_send_key; */
-/* extern unsigned char* mppe_recv_key; */
 
 
 void generate_guid(char data[])
@@ -707,13 +703,18 @@ int crypto_set_certhash()
 
 int crypto_set_cmac()
 {
-  uint32_t cmac[8];
-  char test[33];
-  memset(test, 0, 33);
   
-  /* snprintf(test, 33, "%s%s", mppe_send_key, mppe_recv_key); */
-  /* xlog(LOG_INFO, "%s", test); */
-  /* return -1; */
+  uint8_t hlak[32];
+  uint8_t cmac[32];
+    
+  /*
+   * If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
+   * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
+   * 0x00.
+   */
+  memset(hlak, 0, sizeof(uint32_t)*8);
+  /* cmac = PRF (hlak, SSTP_COMPOUND_MAC_KEY_SEED, 32); */
+  /* PRF(hlak, 32*sizeof(uint8_t), ) */
   return 0;
 }
 
@@ -837,5 +838,95 @@ int sstp_fork()
     {
       xlog (LOG_ERROR, "sstp_fork: %s", strerror(errno));
       return -1;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* experimental */
+/* from eap_peap_common.c */
+/* EAP-PEAP common routines */
+/* Copyright (c) 2008, Jouni Malinen <j@w1.fi> */
+#define SHA1_MAC_LEN 20
+
+void PRF(const uint8_t *key, size_t key_len, const char *label, const uint8_t *seed, size_t seed_len,
+	 uint8_t *buf, size_t buf_len)
+{
+  unsigned char counter = 0;
+  size_t pos, plen;
+  uint8_t hash[SHA1_MAC_LEN];
+  size_t label_len = strlen(label);
+  uint8_t extra[2];
+  const unsigned char *addr[5];
+  size_t len[5];
+  
+  addr[0] = hash;
+  len[0] = 0;
+  addr[1] = (unsigned char *) label;
+  len[1] = label_len;
+  addr[2] = seed;
+  len[2] = seed_len;
+
+  
+  /*
+   * PRF (K,S,LEN) = T1 | T2 | T3 | T4 | ... where:
+   * T1 = HMAC-SHA1(K, S | LEN | 0x01)
+   * T2 = HMAC-SHA1 (K, T1 | S | LEN | 0x02)
+   * T3 = HMAC-SHA1 (K, T2 | S | LEN | 0x03)
+   * T4 = HMAC-SHA1 (K, T3 | S | LEN | 0x04)
+   * ...
+   */
+	
+  extra[0] = buf_len & 0xff;
+  addr[3] = extra;
+  len[3] = 1;
+  addr[4] = &counter;
+  len[4] = 1;
+
+  pos = 0;
+  
+  while (pos < buf_len)
+    {
+      counter++;
+      plen = buf_len - pos;
+      
+      /* int hmac_sha1_vector(const u8 *key=key, size_t key_len=key_len, size_t num_elem=5, */
+                     /* const u8 *addr[]=addr, const size_t *len=len, u8 *mac=hash); */
+      
+      /* unsigned char *HMAC(const EVP_MD *evp_md, const void *key, */
+                      /* int key_len, const unsigned char *d, int n, */
+                      /* unsigned char *md, unsigned int *md_len); */
+
+      /* HMAC(EVP_sha1(), key, key_len, addr, 5, hash, SHA1_MAC_LEN); */
+      
+      if (plen >= SHA1_MAC_LEN)
+	{
+	  memcpy(&buf[pos], hash, SHA1_MAC_LEN);
+	  pos += SHA1_MAC_LEN;
+	}
+      else
+	{
+	  memcpy(&buf[pos], hash, plen);
+	  break;
+	}
+      len[0] = SHA1_MAC_LEN;
     }
 }
