@@ -633,7 +633,7 @@ int crypto_set_binding(void* data)
     {
       xlog(LOG_INFO, "\t\t--> hash algo: %s\n", crypto_req_attrs_str[hash]);
       xlog(LOG_INFO, "\t\t--> nonce: 0x");
-      for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);
+      for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);      
       xlog(LOG_INFO, "\n");
     }
   
@@ -694,8 +694,7 @@ int crypto_set_certhash()
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CA hash: 0x");
-      for(i=0;i<8;i++)
-	xlog(LOG_INFO, "%x", ctx->certhash[i]);
+      for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->certhash[i]);
       xlog(LOG_INFO, "\n");
     }
   
@@ -705,13 +704,14 @@ int crypto_set_certhash()
 
 int crypto_set_cmac()
 { 
-  uint8_t hlak[32];
-  uint8_t cmac[32];
-    
+  uint8_t hlak[32], cmac[32];
+  int i;
+  
   /*
-   * If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
+   * `If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
    * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
-   * 0x00.
+   * 0x00.`
+   * Hence we will choose 0 (zero).
    */
   memset(hlak, 0, sizeof(uint8_t)*32);
   memset(cmac, 0, sizeof(uint8_t)*32);
@@ -722,6 +722,13 @@ int crypto_set_cmac()
     PRF(hlak, SHA256_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA256_MAC_LEN);
 
   memcpy(ctx->cmac, cmac, 32 * sizeof(uint8_t));
+
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "\t\t--> CMac: 0x");
+      for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->certhash[i]);
+      xlog(LOG_INFO, "\n");
+    }
   
   return 0;
 }
@@ -746,11 +753,10 @@ int attribute_status_info(void* data, uint16_t attr_len)
     }
 
   /* show attribute */
-  xlog(LOG_INFO, "\t\t--> attribute id: %#x\n", attribute_id);
+  xlog(LOG_INFO, "\t\t--> attribute ref: %s (%#x)\n", attr_types_str[attribute_id], attribute_id);
   xlog(LOG_INFO, "\t\t--> status: %s (%#x)\n", attrib_status_str[status], status);
 
-  if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
-    return 0;
+  if (ctx->state != CLIENT_CONNECT_REQUEST_SENT) return 0;
   
   /* attrib_value is at most 64 bytes (ie full attr len <= 64 + 12 bytes)*/
   rbytes = sizeof(sstp_attribute_header_t) + 2*sizeof(uint32_t);
