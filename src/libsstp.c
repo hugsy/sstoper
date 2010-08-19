@@ -17,6 +17,10 @@
 #include "libsstp.h"
 #include "sstpclient.h"
 
+extern gnutls_session_t* tls;
+extern sock_t sockfd;
+extern sstp_config *cfg;
+
 void generate_guid(char data[])
 {
   uint32_t data1, data4;
@@ -40,7 +44,11 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
   
   return (header->version == SSTP_VERSION) \
     && (header->reserved==SSTP_DATA_PACKET || header->reserved==SSTP_CONTROL_PACKET);
-  
+  /*
+   * fixme - anomalie sstp
+   * le 1er packet ppp recu du serveur possede une taille de paquet differente de celle
+   * annonce dans le header sstp -> test de la taille echoue 
+   */
     /* && ntohs(header->length)==recv_len; */
 }
 
@@ -183,7 +191,6 @@ void sstp_loop()
 	  /* sstp_read data from sockfd and write it to 1 */
 	  char rbuffer[read_max_size];
 	  ssize_t rbytes;
-	  sleep(2);	  
 	  rbytes = gnutls_record_recv (*tls, rbuffer, read_max_size);
 	  if (rbytes < 0)
 	    {
@@ -388,14 +395,13 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 &&
 	   (*(uint8_t*)(data_ptr + 2)) == 0x03 )
 	{
-
 	  crypto_settings.hash_bitmask = htonl(ctx->hash_algorithm);
 	  for (i=0; i<8; i++) crypto_settings.nonce[i] = htonl(ctx->nonce[i]);
 	  for (i=0; i<8; i++) crypto_settings.certhash[i] = htonl(ctx->certhash[i]);
 	  for (i=0; i<8; i++) crypto_settings.cmac[i] = htonl(ctx->cmac[i]);
 	  
 	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, (void*)&crypto_settings,
-				  sizeof(sstp_attribute_crypto_bind_t));
+				       sizeof(sstp_attribute_crypto_bind_t));
 	  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
 	  
 	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, &attribute, 1,attribute_len);

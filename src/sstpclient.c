@@ -19,6 +19,7 @@
 #include "libsstp.h"
 
 
+
 void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;
@@ -359,13 +360,13 @@ int main (int argc, char** argv)
   cfg->verbose = 0;
     
   parse_options(cfg, argc, argv);
-  /* check_arg(&cfg->server, NULL); */
-  /* check_arg(&cfg->port, "443"); */
-  /* check_arg(&cfg->ca_file, NULL); */
-  /* check_arg(&cfg->username, NULL); */
-  /* check_arg(&cfg->password, NULL); */
-  /* check_arg(&cfg->logfile, NULL); */
-  /* check_arg(&cfg->pppd_path, "/usr/sbin/pppd"); */
+  check_arg(&cfg->server, NULL);
+  check_arg(&cfg->port, "443");
+  check_arg(&cfg->ca_file, NULL);
+  check_arg(&cfg->username, NULL);
+  check_arg(&cfg->password, NULL);
+  check_arg(&cfg->logfile, NULL);
+  check_arg(&cfg->pppd_path, "/usr/sbin/pppd");
   
   
   /* create socket  */

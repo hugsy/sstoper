@@ -124,10 +124,10 @@ static char* attrib_status_str[] =
 /* sstp client status */
 enum client_status
   {
-    CLIENT_CALL_DISCONNECTED = 0,
-    CLIENT_CONNECT_REQUEST_SENT = 1,
-    CLIENT_CONNECT_ACK_RECEIVED = 2,
-    CLIENT_CALL_CONNECTED = 3
+    CLIENT_CALL_DISCONNECTED,
+    CLIENT_CONNECT_REQUEST_SENT,
+    CLIENT_CONNECT_ACK_RECEIVED,
+    CLIENT_CALL_CONNECTED
   };
 
 static char* client_status_str[] =
