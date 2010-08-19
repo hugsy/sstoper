@@ -240,9 +240,9 @@ void sstp_loop()
 int sstp_decode(void* rbuffer, ssize_t sstp_length)
 {
   sstp_header_t* sstp_header;
-  int is_control;
-  int retcode;
- 
+  int is_control, retcode;
+
+  
   if (!is_valid_header(rbuffer, sstp_length))
     {
       xlog(LOG_ERROR, "SSTP packet has invalid header. Dropped\n");
@@ -254,9 +254,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
   is_control = is_control_packet(sstp_header);
   
   if (cfg->verbose)
-    xlog(LOG_INFO, "\t-> %s packet (%lu)\n",
-	 is_control ? "Control" : "Data",
-	 ntohs(sstp_header->length));
+    xlog(LOG_INFO, "\t-> %s packet\n", is_control ? "Control" : "Data");
 
   sstp_length -= sizeof(sstp_header_t);
   if (sstp_length <= 0)
@@ -272,6 +270,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       uint16_t control_type, control_num_attributes;
       void* attribute_ptr;
 
+      
       control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       control_type = ntohs( control_header->message_type );
       control_num_attributes = ntohs( control_header->num_attributes );
@@ -296,7 +295,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       /* parsing control header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (%#x)\n", control_messages_types_str[control_type], control_type);
+	  xlog(LOG_INFO, "\t-> type: %s (%#x)\n", control_messages_types_str[control_type],
+	       control_type);
 	  xlog(LOG_INFO, "\t-> num_attr:%x\n", control_num_attributes);
 	}
       
@@ -373,6 +373,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  void* attribute;
 	  sstp_attribute_crypto_bind_t crypto_settings;
 
+	  memset(&crypto_settings, 0, sizeof(sstp_attribute_crypto_bind_t));
+	  
 	  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
 	  crypto_settings.hash_bitmask = ctx->hash_algorithm;
 	  memcpy(crypto_settings.nonce, ctx->nonce, sizeof(uint32_t)*8);
