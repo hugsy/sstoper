@@ -710,7 +710,8 @@ int crypto_set_certhash()
 
   close(fd);
 
-  memcpy(ctx->certhash, dst, val);
+  for (i=0;i<8;i++)
+    ctx->certhash[i] = htonl(*(uint32_t*)(dst+(i*4)));
   
   if (cfg->verbose)
     {
@@ -742,12 +743,13 @@ int crypto_set_cmac()
   else
     PRF(hlak, SHA256_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA256_MAC_LEN);
 
-  memcpy(ctx->cmac, cmac, 32 * sizeof(uint8_t));
+  for (i=0;i<8;i++)
+    ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4)));
 
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CMac: 0x");
-      for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->certhash[i]);
+      for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->cmac[i]);
       xlog(LOG_INFO, "\n");
     }
   
@@ -877,8 +879,7 @@ int sstp_fork()
 }
 
 
-/* experimental */
-/* from eap_peap_common.c */
+/* From http://tls-eap-ext.googlecode.com/svn/trunk/hostap/src/eap_common/eap_peap_common.c */
 /* EAP-PEAP common routines */
 /* Copyright (c) 2008, Jouni Malinen <j@w1.fi> */
 
@@ -887,12 +888,19 @@ static void PRF(const uint8_t *key, size_t key_len,
 		uint8_t *buf, size_t buf_len)
 {
   unsigned char counter = 0;
-  size_t pos, plen;
+  size_t pos = 0, plen = 0;
   uint8_t hash[key_len];
   uint8_t extra[2];
   const unsigned char *addr[4];
   int len[4];
   const EVP_MD* (*HASH)();
+
+  memset(hash, 0, key_len*sizeof(uint8_t));
+  memset(extra, 0, 2*sizeof(uint8_t));
+  memset(addr, 0, 4*sizeof(unsigned char));
+  memset(len, 0, 4*sizeof(int));
+  HASH = NULL;
+  
   
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
     HASH = &EVP_sha1;
