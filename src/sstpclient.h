@@ -34,6 +34,7 @@ typedef struct
 } sstp_config;
 
 gnutls_session_t tls;
+gnutls_x509_crt_t certificate;
 sock_t sockfd;
 sstp_config *cfg;
 
@@ -45,5 +46,9 @@ extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__rest
 /* functions declaration */
 void xlog(int type, const char* fmt, ...); 
 void* xmalloc(size_t size);
-void end_tls_session(int reason);
+
+static sock_t init_tcp(char* hostname, char* port);
+static int init_tls_session(sock_t sock, gnutls_session_t* tls_session);
+static int check_tls_session();
+static void end_tls_session(int reason);
 

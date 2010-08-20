@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -68,7 +69,7 @@ void usage(char* name, int retcode)
 	  "SSTPClient: SSTP VPN client for *nix\n"
 	  "Usage: %s [ARGUMENTS]\n"
 	  "\t-s, --server <sstp.server.address> (mandatory)\tSSTP Server\n"
-	  "\t-c, --ca-file /path/to/ca_file (mandatory)\tTrusted CA file\n"
+	  "\t-c, --ca-file /path/to/ca_file (mandatory)\tTrusted CA file (only PEM format supported)\n"
 	  "\t-U, --username USERNAME (mandatory)\tWindows username\n"
 	  "\t-P, --password PASSWORD (mandatory)\tWindows password\n"	  
 	  "\t-p, --port NUM \tAlternative server port (default: 443)\n"
@@ -149,7 +150,7 @@ void check_default_arg(char** argument, char* default_value)
 }
 
 
-sock_t init_tcp(char* hostname, char* port)
+static sock_t init_tcp(char* hostname, char* port)
 {
   sock_t sock;
   struct addrinfo *hostinfo, *res, *ll;
@@ -199,7 +200,7 @@ sock_t init_tcp(char* hostname, char* port)
 }
 
 
-int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
+static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
 {
   int retcode;
   const char* err;
@@ -257,6 +258,14 @@ int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
   /* bind gnutls session with the socket */
   gnutls_transport_set_ptr (*tls_session, (gnutls_transport_ptr_t) sock);
 
+  /* check data in tls session */
+  retcode = check_tls_session();
+  if (retcode < 0 )
+    {
+      xlog(LOG_ERROR, "init_tls_session: fail to check tls server certificate\n");
+      gnutls_perror(retcode);
+      return -1;
+    }
   
   /* proceed with handshake */
   retcode = gnutls_handshake (*tls_session);
@@ -272,7 +281,7 @@ int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
 }
 
 
-void end_tls_session(int reason)
+static void end_tls_session(int reason)
 {
   int retcode;
 
@@ -293,9 +302,55 @@ void end_tls_session(int reason)
 
   if (cfg->verbose)
     xlog(LOG_INFO, "Freeing regions.\n");
-  
+
+  gnutls_x509_crt_deinit (certificate);
   gnutls_deinit(tls);
   gnutls_global_deinit();
+}
+
+
+static int check_tls_session()
+{
+  const gnutls_datum_t *certificate_list;
+  unsigned int certificate_list_size;
+  int retcode, status, i;
+
+  retcode = gnutls_certificate_verify_peers2(tls, &status);
+  if (retcode < 0)
+    {
+      xlog(LOG_ERROR, "check_tls_session: fail to get peer certificate status\n");  
+      return -1;
+    }
+
+  if (status & GNUTLS_CERT_INVALID)
+    xlog(LOG_ERROR, "The certificate is not trusted.\n");
+
+  if (status & GNUTLS_CERT_SIGNER_NOT_FOUND)
+    xlog(LOG_ERROR, "The certificate hasn't got a known issuer.\n");
+
+  if (status & GNUTLS_CERT_REVOKED)
+    xlog(LOG_ERROR, "The certificate has been revoked.\n");
+  
+  /* verification de la CA trust list */
+  gnutls_x509_crt_init (&certificate);
+  certificate_list = gnutls_certificate_get_peers (tls, &certificate_list_size);
+  if (certificate_list == NULL)
+    {
+      xlog(LOG_ERROR, "check_tls_session: fail to get peers\n");
+      return -1;
+    }
+
+  /* browse certificate list, and picking the first valid */
+  for (i=0; i<certificate_list_size; i++) 
+    {
+      retcode = gnutls_x509_crt_import (certificate, &certificate_list[i], GNUTLS_X509_FMT_DER);
+      if (retcode == GNUTLS_E_SUCCESS)
+	return 0;
+    }
+
+  /* otherwise return on error */
+  xlog(LOG_ERROR, "check_tls_session: fail to import certificate\n");  
+  return -1;
 }
 
 

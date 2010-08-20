@@ -42,7 +42,7 @@ enum control_messages_types
     SSTP_MSG_CALL_DISCONNECT = 0x0006,
     SSTP_MSG_CALL_DISCONNECT_ACK = 0x0007,
     SSTP_MSG_ECHO_REQUEST = 0x0008,
-    SSTP_MSG_ECHO_RESPONSE = 0x0009
+    SSTP_MSG_ECHO_REPLY = 0x0009
   };
 static char* control_messages_types_str[] =
   {"",
@@ -54,7 +54,7 @@ static char* control_messages_types_str[] =
    "SSTP_MSG_CALL_DISCONNECT",
    "SSTP_MSG_CALL_DISCONNECT_ACK",
    "SSTP_MSG_ECHO_REQUEST",
-   "SSTP_MSG_ECHO_RESPONSE",
+   "SSTP_MSG_ECHO_REPLY",
   };
 
 

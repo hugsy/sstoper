@@ -37,6 +37,17 @@ void generate_guid(char data[])
 }
 
 
+void change_status(uint8_t status)
+{
+  ctx->state = status;
+
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Client is now %s (%#x)\n", client_status_str[ctx->state], ctx->state);
+
+
+}
+
+
 int is_valid_header(void* recv_buf, ssize_t recv_len)
 {
   sstp_header_t* header = (sstp_header_t*) recv_buf;
@@ -150,10 +161,7 @@ void initialize_sstp()
 
   /* set alarm and change state */
   alarm(ctx->negociation_timer.tv_sec);
-  ctx->state = CLIENT_CONNECT_REQUEST_SENT;
-
-  if (cfg->verbose)
-    xlog(LOG_INFO, "Client is now %s (%#x)\n", client_status_str[ctx->state], ctx->state);
+  change_status(CLIENT_CONNECT_REQUEST_SENT);
 
 }
 
@@ -287,7 +295,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  return -1;
 	}
 
-      if (!control_type || control_type > SSTP_MSG_ECHO_RESPONSE)
+      if (!control_type || control_type > SSTP_MSG_ECHO_REPLY)
 	{
 	  xlog(LOG_ERROR, "Incorrect control packet\n");
 	  return -1;  
@@ -299,7 +307,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	{
 	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n", control_messages_types_str[control_type],
 	       control_type);
-	  xlog(LOG_INFO, "\t-> num_attr:%.2x\n", control_num_attributes);
+	  xlog(LOG_INFO, "\t-> num_attr:%d\n", control_num_attributes);
 	}
       
       switch (control_type)
@@ -352,7 +360,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  /* a implementer */
 	  break;
 	  
-	case SSTP_MSG_ECHO_RESPONSE:
+	case SSTP_MSG_ECHO_REPLY:
 	  if (ctx->state != CLIENT_CALL_CONNECTED) return -1;
 	  alarm(0);
 
@@ -397,17 +405,14 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, &crypto_settings,
 				       sizeof(sstp_attribute_crypto_bind_t));
 	  
-	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
+	  /* send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len); */
 
 	  free(attribute);
 
 	  /* and set hello timer */
 	  alarm(ctx->hello_timer.tv_sec);
-	  ctx->state = CLIENT_CALL_CONNECTED;
+	  change_status(CLIENT_CALL_CONNECTED);
 	  
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "Client is now %s (%#x)\n", client_status_str[ctx->state], ctx->state);
-
 	}
 
       retcode = write(1, data_ptr, sstp_length);
@@ -668,7 +673,8 @@ int crypto_set_binding(void* data)
     return -1;
   
   /* change client state */
-  ctx->state = CLIENT_CONNECT_ACK_RECEIVED;
+  change_status(CLIENT_CONNECT_ACK_RECEIVED);
+
   return 0;
 }
 
@@ -678,41 +684,44 @@ int crypto_set_certhash()
   int val,i;
   ssize_t rbytes;
   unsigned char dst[32];
-  gnutls_x509_crt_t cert;
-  const gnutls_datum_t *cert_list;
-  unsigned int cert_list_size;
-  unsigned int buf_len = 4096; 
-  char blah[buf_len];
+  size_t buffer_len = 4096; 
+  char buffer[buffer_len];
+  unsigned char* (*HASH)();
   
-  memset(blah, 0, buf_len);
+  memset(buffer, 0, buffer_len);
   
-  /* pourra etre utiliser pour verifier le certificat */
-  gnutls_x509_crt_init (&cert);
-  cert_list = gnutls_certificate_get_peers (tls, &cert_list_size);
-  gnutls_x509_crt_import (cert, &cert_list[0], GNUTLS_X509_FMT_DER);
-  val = gnutls_x509_crt_export (cert, GNUTLS_X509_FMT_DER, blah, &buf_len);
-  xlog(LOG_INFO, "%s\nbuf_len:%d\n",gnutls_strerror(val),buf_len);
+  /* export certificate to DER format */
+  val = gnutls_x509_crt_export (certificate, GNUTLS_X509_FMT_DER, buffer, &buffer_len);
+  if (val != GNUTLS_E_SUCCESS) 
+    {
+      xlog(LOG_ERROR, "crypto_set_certhash: fail to export certificate\n");
+      if (val == GNUTLS_E_SHORT_MEMORY_BUFFER)
+	xlog(LOG_ERROR, "Missing memory (expected %d)\n", buffer_len);
+      return -1;
+    }
 
-
+  /* selecti hash algorithm */
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA256)
     {
-      val = 256/8;
-      SHA256(blah, buf_len, dst);
+      val = SHA256_MAC_LEN;
+      HASH = &SHA256;
     }
-  else /* if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA) */
+  else /* CERT_HASH_PROTOCOL_SHA1 */
     {
-      val = 160/8;
-      SHA1(blah, buf_len, dst);
+      val = SHA1_MAC_LEN;
+      HASH = &SHA1;
     }
 
-  gnutls_x509_crt_deinit (cert);
+  /* compute hash  */
+  HASH(buffer, buffer_len, dst);
   
-  memcpy(ctx->certhash, dst, 8*sizeof(uint32_t));
+  /* move hash to client context variable */
+  memcpy(ctx->certhash, dst, 8 * sizeof(uint32_t));
   
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CA hash: 0x");
-      for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->certhash[i]);
+      for(i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->certhash[i]);
       xlog(LOG_INFO, "\n");
     }
   
@@ -731,8 +740,8 @@ int crypto_set_cmac()
    * 0x00.`
    * Hence we will choose 0 (zero).
    */
-  memset(hlak, 0, sizeof(uint8_t)*32);
-  memset(cmac, 0, sizeof(uint8_t)*32);
+  memset(hlak, 0, 32 * sizeof(uint8_t));
+  memset(cmac, 0, 32 * sizeof(uint8_t));
 
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
     PRF(hlak, SHA1_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA1_MAC_LEN);
@@ -792,6 +801,12 @@ int attribute_status_info(void* data, uint16_t attr_len)
 }
 
 
+/*
+ * Adapted from ssl_ppp_fork() in /ssltunnel-1.18/client/main.c
+ * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
+ * Alain Thivillon et Herve Schauer Consultants
+ */
+
 int sstp_fork() 
 {
   pid_t ppp_pid;
@@ -811,8 +826,7 @@ int sstp_fork()
   pppd_args[i++] = "9600"; 
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
-  pppd_args[i++] = "require-mppe";
-    
+
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
 
@@ -875,12 +889,14 @@ int sstp_fork()
 }
 
 
-/* From http://tls-eap-ext.googlecode.com/svn/trunk/hostap/src/eap_common/eap_peap_common.c */
-/* EAP-PEAP common routines */
-/* Copyright (c) 2008, Jouni Malinen <j@w1.fi> */
+/*
+ * Adapted from peap_prfplus in eap_peap_common.c 
+ * http://tls-eap-ext.googlecode.com/svn/trunk/hostap/src/eap_common/eap_peap_common.c 
+ * EAP-PEAP common routines 
+ * Copyright (c) 2008, Jouni Malinen <j@w1.fi>
+ */
 
-static void PRF(const uint8_t *key, size_t key_len,
-		const uint8_t *seed, size_t seed_len,
+static void PRF(const uint8_t *key, size_t key_len, const uint8_t *seed, size_t seed_len,
 		uint8_t *buf, size_t buf_len)
 {
   unsigned char counter = 0;
@@ -920,7 +936,7 @@ static void PRF(const uint8_t *key, size_t key_len,
     {
       counter++;
       plen = buf_len - pos;
-      HMAC(HASH(), key, key_len, *addr, 4, hash, len);
+      HMAC(HASH(), key, key_len, addr, 4, hash, len);
       
       if (plen >= key_len)
 	{
