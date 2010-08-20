@@ -20,6 +20,12 @@
 #include "libsstp.h"
 
 
+static sock_t init_tcp(char* hostname, char* port);
+static int init_tls_session();
+static int check_tls_session();
+static void end_tls_session(int reason);
+
+
 void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;
@@ -200,7 +206,7 @@ static sock_t init_tcp(char* hostname, char* port)
 }
 
 
-static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
+static int init_tls_session()
 {
   int retcode;
   const char* err;
@@ -208,9 +214,9 @@ static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
 
   /* initialize and allocate */
   gnutls_global_init();
-  gnutls_init(tls_session, GNUTLS_CLIENT);
+  gnutls_init(&tls, GNUTLS_CLIENT);
 
-  retcode = gnutls_record_set_max_size(*tls_session, SSTP_MAX_BUFFER_SIZE);
+  retcode = gnutls_record_set_max_size(tls, SSTP_MAX_BUFFER_SIZE);
   if (retcode != GNUTLS_E_SUCCESS)
     {
       gnutls_perror(retcode);
@@ -218,7 +224,7 @@ static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
     }
   
   /* setup x509 */
-  retcode = gnutls_priority_set_direct (*tls_session, "SECURE256", &err);  
+  retcode = gnutls_priority_set_direct (tls, "SECURE256", &err);  
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
@@ -245,7 +251,7 @@ static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
     }
 
   /* applying settings to session and free credentials */
-  retcode = gnutls_credentials_set (*tls_session, GNUTLS_CRD_CERTIFICATE, &creds);
+  retcode = gnutls_credentials_set (tls, GNUTLS_CRD_CERTIFICATE, &creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
       xlog(LOG_ERROR, "init_tls_session:tls_credentials_set\n");
@@ -256,7 +262,17 @@ static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
   gnutls_certificate_free_credentials(creds);
   
   /* bind gnutls session with the socket */
-  gnutls_transport_set_ptr (*tls_session, (gnutls_transport_ptr_t) sock);
+  gnutls_transport_set_ptr (tls, (gnutls_transport_ptr_t) sockfd);
+
+  /* proceed with handshake */
+  retcode = gnutls_handshake (tls);
+  if (retcode != GNUTLS_E_SUCCESS)
+    {
+      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n");
+      gnutls_perror (retcode);
+      end_tls_session(retcode);
+      return -1;
+    }
 
   /* check data in tls session */
   retcode = check_tls_session();
@@ -266,17 +282,7 @@ static int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
       gnutls_perror(retcode);
       return -1;
     }
-  
-  /* proceed with handshake */
-  retcode = gnutls_handshake (*tls_session);
-  if (retcode != GNUTLS_E_SUCCESS )
-    {
-      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n");
-      gnutls_perror (retcode);
-      end_tls_session(retcode);
-      return -1;
-    }
-  
+    
   return 0;
 }
 
@@ -312,26 +318,17 @@ static void end_tls_session(int reason)
 static int check_tls_session()
 {
   const gnutls_datum_t *certificate_list;
-  unsigned int certificate_list_size;
-  int retcode, status, i;
-
-  retcode = gnutls_certificate_verify_peers2(tls, &status);
-  if (retcode < 0)
+  unsigned int certificate_list_size, status;
+  int retcode, i;
+   
+  /* verification de la CA trust list */
+  retcode = gnutls_certificate_type_get (tls);
+  if (retcode != GNUTLS_CRT_X509)
     {
-      xlog(LOG_ERROR, "check_tls_session: fail to get peer certificate status\n");  
+      xlog(LOG_ERROR, "check_tls_session: expected GNUTLS_CRT_X509 format\n");
       return -1;
     }
-
-  if (status & GNUTLS_CERT_INVALID)
-    xlog(LOG_ERROR, "The certificate is not trusted.\n");
-
-  if (status & GNUTLS_CERT_SIGNER_NOT_FOUND)
-    xlog(LOG_ERROR, "The certificate hasn't got a known issuer.\n");
-
-  if (status & GNUTLS_CERT_REVOKED)
-    xlog(LOG_ERROR, "The certificate has been revoked.\n");
   
-  /* verification de la CA trust list */
   gnutls_x509_crt_init (&certificate);
   certificate_list = gnutls_certificate_get_peers (tls, &certificate_list_size);
   if (certificate_list == NULL)
@@ -339,13 +336,12 @@ static int check_tls_session()
       xlog(LOG_ERROR, "check_tls_session: fail to get peers\n");
       return -1;
     }
-
+  
   /* browse certificate list, and picking the first valid */
   for (i=0; i<certificate_list_size; i++) 
     {
-      retcode = gnutls_x509_crt_import (certificate, &certificate_list[i], GNUTLS_X509_FMT_DER);
-      if (retcode == GNUTLS_E_SUCCESS)
-	return 0;
+      retcode = gnutls_x509_crt_import (certificate, &certificate_list[0], GNUTLS_X509_FMT_DER);
+      if (retcode == GNUTLS_E_SUCCESS) return 0;
     }
 
   /* otherwise return on error */

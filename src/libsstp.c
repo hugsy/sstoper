@@ -171,7 +171,6 @@ void sstp_loop()
   size_t read_max_size;
   fd_set msrd;
   int retcode;
-  int i;
   
   
   /* initialize sstp context */
@@ -388,7 +387,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 &&
 	   (*(uint8_t*)(data_ptr + 2)) == 0x03 )
 	{
-	  int i;
 	  size_t attribute_len;
 	  void* attribute;
 	  sstp_attribute_crypto_bind_t crypto_settings;
@@ -405,7 +403,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, &crypto_settings,
 				       sizeof(sstp_attribute_crypto_bind_t));
 	  
-	  /* send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len); */
+	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
 
 	  free(attribute);
 
@@ -886,6 +884,8 @@ int sstp_fork()
       xlog (LOG_ERROR, "sstp_fork: %s", strerror(errno));
       return -1;
     }
+
+  return -1;
 }
 
 
@@ -896,8 +896,8 @@ int sstp_fork()
  * Copyright (c) 2008, Jouni Malinen <j@w1.fi>
  */
 
-static void PRF(const uint8_t *key, size_t key_len, const uint8_t *seed, size_t seed_len,
-		uint8_t *buf, size_t buf_len)
+void PRF(const uint8_t *key, size_t key_len, const uint8_t *seed, size_t seed_len,
+	 uint8_t *buf, size_t buf_len)
 {
   unsigned char counter = 0;
   size_t pos = 0, plen = 0;
@@ -936,7 +936,7 @@ static void PRF(const uint8_t *key, size_t key_len, const uint8_t *seed, size_t 
     {
       counter++;
       plen = buf_len - pos;
-      HMAC(HASH(), key, key_len, addr, 4, hash, len);
+      HMAC(HASH(), key, key_len, *addr, 4, hash, len);
       
       if (plen >= key_len)
 	{

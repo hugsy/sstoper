@@ -107,7 +107,6 @@ enum attr_status
     ATTRIB_STATUS_REQUIRED_ATTRIBUTE_MISSING = 0x0000000a,
     ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG = 0x0000000b
   };
-
 static char* attrib_status_str[] =
   {
     "ATTRIB_STATUS_NO_ERROR",
@@ -133,7 +132,6 @@ enum client_status
     CLIENT_CONNECT_ACK_RECEIVED,
     CLIENT_CALL_CONNECTED
   };
-
 static char* client_status_str[] =
   {
     "CLIENT_CALL_DISCONNECTED",
@@ -235,10 +233,11 @@ void send_sstp_control_packet(uint16_t msg_type, void* attribute,
 void* create_attribute(uint8_t attribute_id, void* data, size_t data_length);
 int crypto_set_certhash();
 int crypto_set_binding(void* data);
+int crypto_set_cmac();
 int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
 
 /* exp */
-static void PRF(const uint8_t *key, size_t key_len,
-		const uint8_t *seed, size_t seed_len,
-		uint8_t *buf, size_t buf_len);
+void PRF(const uint8_t *key, size_t key_len,
+	 const uint8_t *seed, size_t seed_len,
+	 uint8_t *buf, size_t buf_len);
