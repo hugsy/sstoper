@@ -235,8 +235,7 @@ int init_tls_session(sock_t sock, gnutls_session_t* tls_session)
     }
 
   /* setting trusted ca list */
-  retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file,
-						    GNUTLS_X509_FMT_PEM);
+  retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
       xlog(LOG_ERROR, "init_tls_session:At least 1 certificate must be valid.\n");

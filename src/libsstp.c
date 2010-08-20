@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
+#include <gnutls/x509.h>
 
 #include "libsstp.h"
 #include "sstpclient.h"
@@ -674,44 +675,39 @@ int crypto_set_binding(void* data)
 
 int crypto_set_certhash()
 {
-  int fd, i, val;
+  int val,i;
   ssize_t rbytes;
-  char buf[1024];
   unsigned char dst[32];
+  gnutls_x509_crt_t cert;
+  const gnutls_datum_t *cert_list;
+  unsigned int cert_list_size;
+  unsigned int buf_len = 4096; 
+  char blah[buf_len];
   
-  fd = open(cfg->ca_file, O_RDONLY);
-  if (fd == -1)
-    {
-      perror("crypto_set_certhash: open");
-      return -1;
-    } 
+  memset(blah, 0, buf_len);
+  
+  /* pourra etre utiliser pour verifier le certificat */
+  gnutls_x509_crt_init (&cert);
+  cert_list = gnutls_certificate_get_peers (tls, &cert_list_size);
+  gnutls_x509_crt_import (cert, &cert_list[0], GNUTLS_X509_FMT_DER);
+  val = gnutls_x509_crt_export (cert, GNUTLS_X509_FMT_DER, blah, &buf_len);
+  xlog(LOG_INFO, "%s\nbuf_len:%d\n",gnutls_strerror(val),buf_len);
 
-  
+
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA256)
     {
-      SHA256_CTX sha_ctx;
       val = 256/8;
-      
-      SHA256_Init(&sha_ctx);
-      while ( (rbytes=read(fd, buf, 1024)) > 0)
-	SHA256_Update(&sha_ctx, buf, rbytes);
-      SHA256_Final(dst, &sha_ctx);
+      SHA256(blah, buf_len, dst);
     }
   else /* if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA) */
     {
-      SHA_CTX sha_ctx;
       val = 160/8;
-      
-      SHA1_Init(&sha_ctx);
-      while ( (rbytes=read(fd, buf, 1024)) > 0)
-	SHA1_Update(&sha_ctx, buf, rbytes);
-      SHA1_Final(dst, &sha_ctx);
+      SHA1(blah, buf_len, dst);
     }
 
-  close(fd);
-
-  for (i=0;i<8;i++)
-    ctx->certhash[i] = htonl(*(uint32_t*)(dst+(i*4)));
+  gnutls_x509_crt_deinit (cert);
+  
+  memcpy(ctx->certhash, dst, 8*sizeof(uint32_t));
   
   if (cfg->verbose)
     {
