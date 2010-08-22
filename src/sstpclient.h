@@ -14,6 +14,10 @@ typedef int sock_t;
     exit(1);					\
   }
 
+#ifndef SIZE_MAX
+#define SIZE_MAX ~((size_t)1)
+#endif
+
 enum 
   {
     LOG_DEBUG = 0,

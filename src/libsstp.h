@@ -1,6 +1,12 @@
 #include <stdint.h>
 #include <sys/time.h>
 
+#ifdef __GNUC__
+#define UNUSED __attribute__ ((unused))
+#else
+#define UNUSED
+#endif
+
 /* System properties */
 #define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
    
@@ -44,7 +50,7 @@ enum control_messages_types
     SSTP_MSG_ECHO_REQUEST = 0x0008,
     SSTP_MSG_ECHO_REPLY = 0x0009
   };
-static char* control_messages_types_str[] =
+static UNUSED char* control_messages_types_str[] =
   {"",
    "SSTP_MSG_CALL_CONNECT_REQUEST",
    "SSTP_MSG_CALL_CONNECT_ACK",
@@ -52,7 +58,7 @@ static char* control_messages_types_str[] =
    "SSTP_MSG_CALL_CONNECTED",
    "SSTP_MSG_CALL_ABORT",
    "SSTP_MSG_CALL_DISCONNECT",
-   "SSTP_MSG_CALL_DISCONNECT_ACK",
+   "SSTP_MSG_CAL+1L_DISCONNECT_ACK",
    "SSTP_MSG_ECHO_REQUEST",
    "SSTP_MSG_ECHO_REPLY",
   };
@@ -67,7 +73,7 @@ enum attr_types
     SSTP_ATTRIB_CRYPTO_BINDING = 0x03,
     SSTP_ATTRIB_CRYPTO_BINDING_REQ = 0x04
   };
-static char* attr_types_str[] =
+static UNUSED char* attr_types_str[] =
   {
     "SSTP_ATTRIB_NO_ERROR", 
     "SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID",
@@ -83,7 +89,7 @@ enum crypto_req_attrs
     CERT_HASH_PROTOCOL_SHA1 = 0x01,
     CERT_HASH_PROTOCOL_SHA256 = 0x02
   };
-static char* crypto_req_attrs_str[]=
+static UNUSED char* crypto_req_attrs_str[]=
   {
     "",
     "CERT_HASH_PROTOCOL_SHA1",
@@ -107,7 +113,7 @@ enum attr_status
     ATTRIB_STATUS_REQUIRED_ATTRIBUTE_MISSING = 0x0000000a,
     ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG = 0x0000000b
   };
-static char* attrib_status_str[] =
+static UNUSED char* attrib_status_str[] =
   {
     "ATTRIB_STATUS_NO_ERROR",
     "ATTRIB_STATUS_DUPLICATE_ATTRIBUTE",
@@ -132,7 +138,7 @@ enum client_status
     CLIENT_CONNECT_ACK_RECEIVED,
     CLIENT_CALL_CONNECTED
   };
-static char* client_status_str[] =
+static UNUSED char* client_status_str[] =
   {
     "CLIENT_CALL_DISCONNECTED",
     "CLIENT_CONNECT_REQUEST_SENT",

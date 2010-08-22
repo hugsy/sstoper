@@ -67,14 +67,14 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
     }
 
   /*
-   * bug sstp ou ppp (fixme)
+   * bug server sstp ou ppp (fixme)
    * le 1er packet ppp recu du serveur possede une taille de paquet differente de celle
    * annonce dans le header sstp -> test de la taille echoue 
    */
   if (ntohs(header->length) != recv_len)
     {
       if (cfg->verbose)
-	xlog(LOG_ERROR, "Unmatching length: %#x!=%#x\n", header->version, recv_len);
+	xlog(LOG_ERROR, "Unmatching length: annonced %lu, received %lu\n", ntohs(header->length), recv_len);
       return 0;
     }
 
@@ -102,13 +102,14 @@ int https_session_negociation()
   
   rbytes = snprintf(buf, read_size,
 		    "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
+		    "Host: fuckme.%s\r\n" // <-- bug : le hostname pas valide cote server 
 		    "SSTPCORRELATIONID: %s\r\n"
 		    "Content-Length: %llu\r\n"
-		    "Host: %s\r\n"
+		    "Cookie: ClientHTTPCookie=TRUE;ClientBypassHLAuth=TRUE\r\n"
 		    "\r\n",
+		    cfg->server,
 		    guid,
-		    __UNSIGNED_LONG_LONG_MAX__,
-		    cfg->server);
+		    __UNSIGNED_LONG_LONG_MAX__);
 
   if (cfg->verbose) xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
 
@@ -680,7 +681,6 @@ int crypto_set_binding(void* data)
 int crypto_set_certhash()
 {
   int val,i;
-  ssize_t rbytes;
   unsigned char dst[32];
   size_t buffer_len = 4096; 
   char buffer[buffer_len];
@@ -698,13 +698,13 @@ int crypto_set_certhash()
       return -1;
     }
 
-  /* selecti hash algorithm */
+  /* select hash algorithm */
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA256)
     {
       val = SHA256_MAC_LEN;
       HASH = &SHA256;
     }
-  else /* CERT_HASH_PROTOCOL_SHA1 */
+  else 
     {
       val = SHA1_MAC_LEN;
       HASH = &SHA1;
@@ -729,25 +729,40 @@ int crypto_set_certhash()
 
 int crypto_set_cmac()
 { 
-  uint8_t hlak[32], cmac[32];
+  uint8_t hlak[32], cmac[32], seed[29], data[33];
   int i;
   
   /*
    * `If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
    * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
    * 0x00.`
-   * Hence we will choose 0 (zero).
+   * Ok, that what will do. HLAK is zero-ed.
    */
   memset(hlak, 0, 32 * sizeof(uint8_t));
   memset(cmac, 0, 32 * sizeof(uint8_t));
+  memset(seed, 0, 29 * sizeof(uint8_t));
 
-  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
-    PRF(hlak, SHA1_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA1_MAC_LEN);
+  memcpy(seed, SSTP_CMAC_SEED, 29);
+  
+  memset(data, 0, 32 * sizeof(uint8_t));
+  snprintf(data, "%s%d%x", seed, 32, 0x01 );
+  
+  int a;
+  
+  /*  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
+    PRF(hlak, SHA1_MAC_LEN, seed, sizeof(SSTP_CMAC_SEED), cmac, SHA1_MAC_LEN);
   else
-    PRF(hlak, SHA256_MAC_LEN, SSTP_CMAC_SEED, sizeof(SSTP_CMAC_SEED), cmac, SHA256_MAC_LEN);
+    PRF(hlak, SHA256_MAC_LEN, seed, sizeof(SSTP_CMAC_SEED), cmac, SHA256_MAC_LEN);
+  */
 
-  for (i=0;i<8;i++)
-    ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4)));
+  HMAC(EVP_sha256(), hlak, 32 * sizeof(uint8_t),
+       data, 33 * sizeof(uint8_t),
+       cmac, &a);
+  xlog(LOG_INFO, "%s -> %d\n", data, a);
+  
+  memcpy(ctx->cmac, cmac, 32*sizeof(uint8_t));
+  /* for (i=0;i<8;i++) */
+    /* ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4))); */
 
   if (cfg->verbose)
     {
@@ -804,7 +819,6 @@ int attribute_status_info(void* data, uint16_t attr_len)
  * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
  * Alain Thivillon et Herve Schauer Consultants
  */
-
 int sstp_fork() 
 {
   pid_t ppp_pid;
@@ -820,6 +834,7 @@ int sstp_fork()
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
+  pppd_args[i++] = "noauth";
   pppd_args[i++] = "nodefaultroute";
   pppd_args[i++] = "9600"; 
   pppd_args[i++] = "sync";
@@ -889,65 +904,55 @@ int sstp_fork()
 }
 
 
-/*
- * Adapted from peap_prfplus in eap_peap_common.c 
- * http://tls-eap-ext.googlecode.com/svn/trunk/hostap/src/eap_common/eap_peap_common.c 
- * EAP-PEAP common routines 
- * Copyright (c) 2008, Jouni Malinen <j@w1.fi>
- */
-
-void PRF(const uint8_t *key, size_t key_len, const uint8_t *seed, size_t seed_len,
-	 uint8_t *buf, size_t buf_len)
+void PRF(const uint8_t *key, size_t key_len,
+	  const uint8_t *data, size_t data_len,
+	  uint8_t *buf, size_t buf_len)
 {
-  unsigned char counter = 0;
-  size_t pos = 0, plen = 0;
-  uint8_t hash[key_len];
-  uint8_t extra[2];
-  const unsigned char *addr[4];
-  int len[4];
-  const EVP_MD* (*HASH)();
-
-  memset(hash, 0, key_len*sizeof(uint8_t));
-  memset(extra, 0, 2*sizeof(uint8_t));
-  memset(addr, 0, 4*sizeof(unsigned char));
-  memset(len, 0, 4*sizeof(int));
-  HASH = NULL;
   
+  uint16_t counter = 1;
+  size_t pos, plen;
+  uint8_t hash[SHA256_MAC_LEN];
+  const uint8_t *addr[4];
+  size_t len[4];
+  uint8_t counter_le[2], length_le[2];
   
-  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
-    HASH = &EVP_sha1;
-  else
-    HASH = &EVP_sha256;
-  
-  addr[0] = hash;
-  addr[1] = seed;
-  addr[2] = extra;
-  addr[3] = &counter;
-  
-  extra[0] = buf_len & 0xff;
+  addr[0] = counter_le;
+  len[0] = 2;
     
-  len[0] = 0;
-  len[1] = seed_len;
-  len[2] = 1;
-  len[3] = 1;  
-  
+  addr[1] = (uint8_t *) "";
+  len[1] = strlen("");
+  addr[2] = data;
+  len[2] = data_len;
+  addr[3] = length_le;
+  len[3] = sizeof(length_le);
+
+  *length_le = buf_len * 8;
   pos = 0;
-  while (pos < buf_len)
-    {
-      counter++;
-      plen = buf_len - pos;
-      HMAC(HASH(), key, key_len, *addr, 4, hash, len);
+  while (pos < buf_len) {
+    plen = buf_len - pos;
+    *counter_le = counter;
+
+
+    if (plen >= SHA256_MAC_LEN) {
+      HMAC(EVP_sha256(), key, key_len, addr, 4, &buf[pos], 10);      
+      pos += SHA256_MAC_LEN;
+    } else {
+      /* char blah[16000]; int i; */
+      /* memset(blah, 0, 16000); */
+      /* int idx=0; */
       
-      if (plen >= key_len)
-	{
-	  memcpy(&buf[pos], hash, key_len);
-	  pos += key_len;
-	}
-      else
-	{
-	  memcpy(&buf[pos], hash, plen);
-	  break;
-	}
-      len[0] = key_len;
+      /* for (i=0; i<4; i++)  */
+	/* { */
+	  /* snprintf(blah + idx, len[i], "%x", *addr[i]); */
+	  /* idx += len[i]; */
+	/* } */
+      HMAC(EVP_sha256(), key, key_len, *addr, 4, hash, SHA256_MAC_LEN); 
+      memcpy(&buf[pos], hash, plen);
+      break;
     }
+    counter++;
+  }
+
+
+    
 }

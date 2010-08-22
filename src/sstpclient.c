@@ -49,11 +49,17 @@ void* xmalloc(size_t size)
 {
   void *ptr;
 
+  if (size > SIZE_MAX / sizeof(size_t))
+    {
+      perror("xmalloc: try to allocate incorrect size");
+      abort();
+    }
+					     
   ptr = malloc(size);
   
   if ( ptr == NULL )
     {
-      perror("xmalloc");
+      perror("xmalloc: fail to allocate space");
       abort();
     }
     
@@ -318,7 +324,7 @@ static void end_tls_session(int reason)
 static int check_tls_session()
 {
   const gnutls_datum_t *certificate_list;
-  unsigned int certificate_list_size, status;
+  unsigned int certificate_list_size;
   int retcode, i;
    
   /* verification de la CA trust list */
