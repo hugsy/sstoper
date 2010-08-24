@@ -17,7 +17,9 @@
 #define SSTP_NEGOCIATION_TIMER 30
 #define SSTP_MAX_BUFFER_SIZE 1024
 
-#define SSTP_CMAC_SEED  "SSTP inner method derived CMK"
+#define SSTP_CMAC_SEED_STR  "SSTP inner method derived CMK"
+#define SSTP_CMAC_SEED_LEN  29
+
 #define SHA1_MAC_LEN 20
 #define SHA256_MAC_LEN 32
 
@@ -58,7 +60,7 @@ static UNUSED char* control_messages_types_str[] =
    "SSTP_MSG_CALL_CONNECTED",
    "SSTP_MSG_CALL_ABORT",
    "SSTP_MSG_CALL_DISCONNECT",
-   "SSTP_MSG_CAL+1L_DISCONNECT_ACK",
+   "SSTP_MSG_CALL_DISCONNECT_ACK",
    "SSTP_MSG_ECHO_REQUEST",
    "SSTP_MSG_ECHO_REPLY",
   };
@@ -244,6 +246,5 @@ int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
 
 /* exp */
-void PRF(const uint8_t *key, size_t key_len,
-	 const uint8_t *seed, size_t seed_len,
-	 uint8_t *buf, size_t buf_len);
+uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len);
+

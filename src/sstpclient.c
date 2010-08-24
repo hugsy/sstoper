@@ -358,23 +358,32 @@ static int check_tls_session()
 
 void sighandle(int signum)
 {
+  int status = 0;
+  
   switch(signum) 
     {
     case SIGALRM:
       xlog(LOG_INFO, "Negociation timer ends\n");
       break;
+
+    case SIGCHLD:
+      waitpid(ctx->pppd_pid, &status, WNOHANG);     
+      xlog(LOG_INFO, "Process pppd (%d) has died with retcode %d\n", ctx->pppd_pid, status);
+      end_tls_session(signum);
+      free(cfg);
+      exit(signum);
       
     case SIGINT:
     case SIGTERM:
       if (ctx!=NULL && ctx->pppd_pid < 0)
 	{
 	  kill(ctx->pppd_pid, SIGINT);
-	  waitpid(ctx->pppd_pid, NULL, 0);
+	  waitpid(ctx->pppd_pid, &status, 0);
 	}
 
       xlog(LOG_INFO, "SIG: Closing connection\n");
-      fflush(stdout);
       end_tls_session(SIGINT);
+      free(cfg);
       exit(signum);
     }
 }
@@ -392,7 +401,8 @@ int main (int argc, char* argv[])
   sigfillset(&sigset);
   sigdelset(&sigset, SIGTERM);
   sigdelset(&sigset, SIGINT);
-  sigdelset(&sigset, SIGALRM);  
+  sigdelset(&sigset, SIGALRM);
+  sigdelset(&sigset, SIGCHLD);
   sigprocmask(SIG_SETMASK, &sigset, NULL);
 
   /* set sigaction */
@@ -404,6 +414,7 @@ int main (int argc, char* argv[])
   sigaction(SIGINT, &saction, NULL);
   sigaction(SIGTERM, &saction, NULL);
   sigaction(SIGALRM, &saction, NULL);
+  sigaction(SIGCHLD, &saction, NULL);
 
   /* configuration parsing and privilege check */
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));

@@ -31,7 +31,7 @@ void generate_guid(char data[])
   data2 = (rand() + 1) * (sizeof(uint16_t) * 8);
   data3 = (rand() + 1) * (sizeof(uint16_t) * 8);
   data4 = (rand() + 1) * (sizeof(uint32_t) * 8);
-  snprintf(data, 38, "{%x-%x-%x-%x}", data1, data2, data3, data4);
+  snprintf(data, 38, "{%.2X-%.2X-%.2X-%.2X}", data1, data2, data3, data4);
 
   if (cfg->verbose) xlog(LOG_INFO, "Using GUID %s\n", data);
 }
@@ -102,10 +102,11 @@ int https_session_negociation()
   
   rbytes = snprintf(buf, read_size,
 		    "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
-		    "Host: fuckme.%s\r\n" // <-- bug : le hostname pas valide cote server 
+		    "Host: AAAAAAAAAAAAAAAAAAAAAA.%s\r\n" // <-- bug : le hostname pas valide cote server 
 		    "SSTPCORRELATIONID: %s\r\n"
 		    "Content-Length: %llu\r\n"
-		    "Cookie: ClientHTTPCookie=TRUE;ClientBypassHLAuth=TRUE\r\n"
+		    "ClientBypassHLAuth: TRUE\r\n"
+		    "Cookie: ClientHTTPCookie=1 OR 1=1;\r\n"
 		    "\r\n",
 		    cfg->server,
 		    guid,
@@ -649,7 +650,7 @@ int crypto_set_binding(void* data)
   /* choose strongest algorithm */
   if (hash == CERT_HASH_PROTOCOL_SHA256)
     ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
-  else /* if (hash & CERT_HASH_PROTOCOL_SHA1) */
+  else
     ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
 
   memcpy(ctx->nonce, req->nonce, sizeof(uint32_t)*8);
@@ -729,8 +730,10 @@ int crypto_set_certhash()
 
 int crypto_set_cmac()
 { 
-  uint8_t hlak[32], cmac[32], seed[29], data[33];
+  uint8_t hlak[32];
   int i;
+  uint8_t *cmac;
+  uint8_t seed[SSTP_CMAC_SEED_LEN];
   
   /*
    * `If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
@@ -739,31 +742,17 @@ int crypto_set_cmac()
    * Ok, that what will do. HLAK is zero-ed.
    */
   memset(hlak, 0, 32 * sizeof(uint8_t));
-  memset(cmac, 0, 32 * sizeof(uint8_t));
-  memset(seed, 0, 29 * sizeof(uint8_t));
-
-  memcpy(seed, SSTP_CMAC_SEED, 29);
+  memcpy(seed, SSTP_CMAC_SEED_STR, SSTP_CMAC_SEED_LEN);
   
-  memset(data, 0, 32 * sizeof(uint8_t));
-  snprintf(data, "%s%d%x", seed, 32, 0x01 );
-  
-  int a;
-  
-  /*  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
-    PRF(hlak, SHA1_MAC_LEN, seed, sizeof(SSTP_CMAC_SEED), cmac, SHA1_MAC_LEN);
+  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
+    cmac = PRF(hlak, seed, SHA1_MAC_LEN);
   else
-    PRF(hlak, SHA256_MAC_LEN, seed, sizeof(SSTP_CMAC_SEED), cmac, SHA256_MAC_LEN);
-  */
-
-  HMAC(EVP_sha256(), hlak, 32 * sizeof(uint8_t),
-       data, 33 * sizeof(uint8_t),
-       cmac, &a);
-  xlog(LOG_INFO, "%s -> %d\n", data, a);
+    cmac = PRF(hlak, seed, SHA256_MAC_LEN);
+ 
+  for (i=0;i<8;i++)
+    ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4)));
+  free(cmac);
   
-  memcpy(ctx->cmac, cmac, 32*sizeof(uint8_t));
-  /* for (i=0;i<8;i++) */
-    /* ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4))); */
-
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CMac: 0x");
@@ -814,11 +803,15 @@ int attribute_status_info(void* data, uint16_t attr_len)
 }
 
 
-/*
+/**
  * Adapted from ssl_ppp_fork() in /ssltunnel-1.18/client/main.c
  * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
  * Alain Thivillon et Herve Schauer Consultants
- */
+ *
+ * \brief fork and execute pppd daemon
+ * \retval child pid if process is the father
+ * \retval none otherwise (execute pppd)
+ **/
 int sstp_fork() 
 {
   pid_t ppp_pid;
@@ -839,7 +832,6 @@ int sstp_fork()
   pppd_args[i++] = "9600"; 
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
-
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
 
@@ -873,6 +865,7 @@ int sstp_fork()
       
       if (aslave > 2) close(aslave);
       if (amaster > 2) close(amaster);
+
     
       return ppp_pid;
     }
@@ -900,59 +893,105 @@ int sstp_fork()
       return -1;
     }
 
-  return -1;
+  return 0;
 }
 
 
-void PRF(const uint8_t *key, size_t key_len,
-	  const uint8_t *data, size_t data_len,
-	  uint8_t *buf, size_t buf_len)
+/**
+ * from : http://open1x.svn.sourceforge.net/svnroot/open1x/trunk/xsupplicant/src/eap_types/peap/peap_extensions.c
+ * \brief PRF+ as defined by the Microsoft PEAP documentation.
+ *
+ * @param[in] key   The "TempKey" as defined by the Microsoft PEAP documentation
+ *                                      (The first 40 octets of the TK)
+ * @param[in] seed   The IPMK Seed.
+ * @param[in] len   The minimum amount of result data we need to provide.
+ *
+ * \retval NULL on failure
+ * \retval uint8_t* containing at least 'len' bytes
+ **/
+
+uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len)
 {
+  uint8_t iterations = 0;
+  int i = 0;
+  uint8_t *temp_data = NULL;
+  uint8_t last_val[20];
+  uint8_t *Tn = NULL;
+  uint8_t mac[20];
+  unsigned int mdlen = 0;
   
-  uint16_t counter = 1;
-  size_t pos, plen;
-  uint8_t hash[SHA256_MAC_LEN];
-  const uint8_t *addr[4];
-  size_t len[4];
-  uint8_t counter_le[2], length_le[2];
+  const EVP_MD* (*HASH)();
+
+  if (len == SHA1_MAC_LEN)
+    HASH = &EVP_sha1;
+  else
+    HASH = &EVP_sha256; 
   
-  addr[0] = counter_le;
-  len[0] = 2;
-    
-  addr[1] = (uint8_t *) "";
-  len[1] = strlen("");
-  addr[2] = data;
-  len[2] = data_len;
-  addr[3] = length_le;
-  len[3] = sizeof(length_le);
+  iterations = (len / 32);
 
-  *length_le = buf_len * 8;
-  pos = 0;
-  while (pos < buf_len) {
-    plen = buf_len - pos;
-    *counter_le = counter;
+  if ((len % 32) != 0)
+    iterations++;   // We need a fractional amount of data, so round up.
 
+  Tn = (uint8_t*)xmalloc(iterations * 32);
+  temp_data = (uint8_t*) xmalloc(SSTP_CMAC_SEED_LEN + 3);
+  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);
 
-    if (plen >= SHA256_MAC_LEN) {
-      HMAC(EVP_sha256(), key, key_len, addr, 4, &buf[pos], 10);      
-      pos += SHA256_MAC_LEN;
-    } else {
-      /* char blah[16000]; int i; */
-      /* memset(blah, 0, 16000); */
-      /* int idx=0; */
-      
-      /* for (i=0; i<4; i++)  */
-	/* { */
-	  /* snprintf(blah + idx, len[i], "%x", *addr[i]); */
-	  /* idx += len[i]; */
-	/* } */
-      HMAC(EVP_sha256(), key, key_len, *addr, 4, hash, SHA256_MAC_LEN); 
-      memcpy(&buf[pos], hash, plen);
-      break;
+  temp_data[SSTP_CMAC_SEED_LEN] = 0x01;
+  
+  // Malloc should have inited everything else to 0x00, so we don't need to set those.
+  HMAC(HASH(),
+       key, 32,
+       temp_data, (SSTP_CMAC_SEED_LEN + 3),
+       (unsigned char *)&mac, &mdlen);
+
+  if (mdlen != len)
+    {
+      xlog(LOG_INFO, "The SHA1 hash function didn't return valid data!\n");
+      free(temp_data);
+      free(Tn);
+
+      return NULL;
     }
-    counter++;
-  }
 
+  /* xlog(LOG_DEBUG, "Hash result : %d bytes\n", mdlen); */
 
-    
+  memcpy(Tn, &mac[0], mdlen);     // Copy the initial data to Tn.
+  memcpy(&last_val[0], &mac[0], mdlen);
+
+  free(temp_data);
+
+  if (iterations >= 2)
+    {
+      for (i = 2; i <= iterations; i++)
+	{
+	  temp_data = (uint8_t*) xmalloc(SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN + 3);
+	  
+	  memcpy(temp_data, last_val, SHA256_MAC_LEN);
+	  memcpy(&temp_data[SHA256_MAC_LEN], seed, SSTP_CMAC_SEED_LEN);
+
+	  temp_data[SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN] = i;
+
+	  // Malloc should have inited everything else to 0x00, so we don't need to set those.
+	  HMAC(EVP_sha1(), key, 40, temp_data,
+	       (SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN + 3),
+	       (unsigned char *)&mac, &mdlen);
+	  
+	  if (mdlen != SHA256_MAC_LEN)
+	    {
+	      xlog(LOG_DEBUG, "SHA1 hash didn't return valid data in %s()!\n", __FUNCTION__);
+	      free(temp_data);
+	      free(Tn);
+	      return NULL;
+	    }
+	  
+	  free(temp_data);
+
+	  /* xlog(LOG_DEBUG, "Hash result %d bytes\n", mdlen); */
+	  
+	  memcpy(&last_val[0], &mac[0], SHA256_MAC_LEN);
+	  memcpy(&Tn[((i - 1) * SHA256_MAC_LEN)], &mac[0], SHA256_MAC_LEN);
+	}
+    }
+  
+  return Tn;
 }
