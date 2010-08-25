@@ -246,5 +246,5 @@ int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
 
 /* exp */
-uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len);
+uint8_t* PRF(uint8_t* key, uint8_t* seed, uint16_t len);
 

@@ -663,7 +663,7 @@ int crypto_set_binding(void* data)
       for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);
       xlog(LOG_INFO, "\n");
     }
-  
+
   /* compute ca file hash with chosen algorithm */
   if (crypto_set_certhash() < 0)
     return -1;
@@ -671,7 +671,7 @@ int crypto_set_binding(void* data)
   /* compute compound mac according to spec */
   if (crypto_set_cmac() < 0)
     return -1;
-  
+
   /* change client state */
   change_status(CLIENT_CONNECT_ACK_RECEIVED);
 
@@ -715,8 +715,12 @@ int crypto_set_certhash()
   HASH(buffer, buffer_len, dst);
   
   /* move hash to client context variable */
-  memcpy(ctx->certhash, dst, 8 * sizeof(uint32_t));
-  
+  i=0;
+  do 
+    {
+      ctx->certhash[i++] = (*(uint32_t*)(dst+(i*4)));
+    } while (i < 8);
+
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CA hash: 0x");
@@ -739,20 +743,23 @@ int crypto_set_cmac()
    * `If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
    * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
    * 0x00.`
-   * Ok, that what will do. HLAK is zero-ed.
    */
   memset(hlak, 0, 32 * sizeof(uint8_t));
   memcpy(seed, SSTP_CMAC_SEED_STR, SSTP_CMAC_SEED_LEN);
-  
+
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
     cmac = PRF(hlak, seed, SHA1_MAC_LEN);
   else
     cmac = PRF(hlak, seed, SHA256_MAC_LEN);
- 
-  for (i=0;i<8;i++)
-    ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4)));
-  free(cmac);
+
+  i=0;
+  do 
+    {
+      ctx->cmac[i++] = ntohl(*(uint32_t*)(cmac+(i*4)));
+    } while (i < 8);
   
+  free(cmac);
+
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CMac: 0x");
@@ -897,27 +904,15 @@ int sstp_fork()
 }
 
 
-/**
- * from : http://open1x.svn.sourceforge.net/svnroot/open1x/trunk/xsupplicant/src/eap_types/peap/peap_extensions.c
- * \brief PRF+ as defined by the Microsoft PEAP documentation.
- *
- * @param[in] key   The "TempKey" as defined by the Microsoft PEAP documentation
- *                                      (The first 40 octets of the TK)
- * @param[in] seed   The IPMK Seed.
- * @param[in] len   The minimum amount of result data we need to provide.
- *
- * \retval NULL on failure
- * \retval uint8_t* containing at least 'len' bytes
- **/
-
-uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len)
+uint8_t* PRF(uint8_t *key, uint8_t *seed, uint16_t len)
 {
   uint8_t iterations = 0;
-  int i = 0;
+  uint8_t i = 0x01;
   uint8_t *temp_data = NULL;
+  size_t temp_len;
   uint8_t last_val[20];
   uint8_t *Tn = NULL;
-  uint8_t mac[20];
+  uint8_t *mac;
   unsigned int mdlen = 0;
   
   const EVP_MD* (*HASH)();
@@ -926,72 +921,26 @@ uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len)
     HASH = &EVP_sha1;
   else
     HASH = &EVP_sha256; 
-  
-  iterations = (len / 32);
 
-  if ((len % 32) != 0)
-    iterations++;   // We need a fractional amount of data, so round up.
+  mac = (uint8_t*) xmalloc(len);
 
-  Tn = (uint8_t*)xmalloc(iterations * 32);
-  temp_data = (uint8_t*) xmalloc(SSTP_CMAC_SEED_LEN + 3);
-  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);
+  temp_len = SSTP_CMAC_SEED_LEN + sizeof(uint16_t) + sizeof(uint8_t);
+  temp_data = (uint8_t*) xmalloc(temp_len);
 
-  temp_data[SSTP_CMAC_SEED_LEN] = 0x01;
-  
-  // Malloc should have inited everything else to 0x00, so we don't need to set those.
-  HMAC(HASH(),
-       key, 32,
-       temp_data, (SSTP_CMAC_SEED_LEN + 3),
-       (unsigned char *)&mac, &mdlen);
+  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN); 
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t));
+
+  HMAC(HASH(), key, 32, temp_data, temp_len, (unsigned char *)mac, &mdlen);
 
   if (mdlen != len)
     {
       xlog(LOG_INFO, "The SHA1 hash function didn't return valid data!\n");
       free(temp_data);
-      free(Tn);
-
       return NULL;
     }
 
-  /* xlog(LOG_DEBUG, "Hash result : %d bytes\n", mdlen); */
-
-  memcpy(Tn, &mac[0], mdlen);     // Copy the initial data to Tn.
-  memcpy(&last_val[0], &mac[0], mdlen);
-
   free(temp_data);
 
-  if (iterations >= 2)
-    {
-      for (i = 2; i <= iterations; i++)
-	{
-	  temp_data = (uint8_t*) xmalloc(SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN + 3);
-	  
-	  memcpy(temp_data, last_val, SHA256_MAC_LEN);
-	  memcpy(&temp_data[SHA256_MAC_LEN], seed, SSTP_CMAC_SEED_LEN);
-
-	  temp_data[SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN] = i;
-
-	  // Malloc should have inited everything else to 0x00, so we don't need to set those.
-	  HMAC(EVP_sha1(), key, 40, temp_data,
-	       (SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN + 3),
-	       (unsigned char *)&mac, &mdlen);
-	  
-	  if (mdlen != SHA256_MAC_LEN)
-	    {
-	      xlog(LOG_DEBUG, "SHA1 hash didn't return valid data in %s()!\n", __FUNCTION__);
-	      free(temp_data);
-	      free(Tn);
-	      return NULL;
-	    }
-	  
-	  free(temp_data);
-
-	  /* xlog(LOG_DEBUG, "Hash result %d bytes\n", mdlen); */
-	  
-	  memcpy(&last_val[0], &mac[0], SHA256_MAC_LEN);
-	  memcpy(&Tn[((i - 1) * SHA256_MAC_LEN)], &mac[0], SHA256_MAC_LEN);
-	}
-    }
-  
-  return Tn;
+  return mac; 
 }
