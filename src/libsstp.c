@@ -918,6 +918,7 @@ int sstp_fork()
 uint8_t* PRF(char* key, char* seed, uint16_t len)
 {
   uint8_t *temp_data = NULL;
+  uint8_t i=0x01;
   size_t temp_len = 0;
   uint8_t prefix = 0x01;
   uint8_t *mac = NULL;
@@ -934,6 +935,13 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
   temp_len = SSTP_CMAC_SEED_LEN + sizeof(uint16_t) + sizeof(uint8_t);
   temp_data = (uint8_t*) xmalloc(temp_len);
 
+  /*
+   * CMK = First 32 octets of PRF+ (HLAK, CMK Seed, 32);
+   * PRF = PRF (Key, Seed, Len) = T1 | T2 | T3 | T4 | ... ou Len est un uint16_t
+   * T1 = HMAC-SHA256 (K, S | LEN | 0x01)
+   * T2 = HMAC-SHA256 (K, T1 | S | LEN | 0x02)
+   * ...
+   */
   memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN); 
   memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
   memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t));
