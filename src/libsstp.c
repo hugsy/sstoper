@@ -42,15 +42,13 @@ void change_status(uint8_t status)
   ctx->state = status;
 
   if (cfg->verbose)
-    xlog(LOG_INFO, "Client is now %s (%#x)\n", client_status_str[ctx->state], ctx->state);
-
+    xlog(LOG_INFO, "Client status : %s (%#x)\n", client_status_str[ctx->state], ctx->state);
 
 }
 
 
-int is_valid_header(void* recv_buf, ssize_t recv_len)
+int is_valid_header(sstp_header_t* header, ssize_t recv_len)
 {
-  sstp_header_t* header = (sstp_header_t*) recv_buf;
   
   if (header->version != SSTP_VERSION)
     {
@@ -59,7 +57,8 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
       return 0;
     }
 
-  if (header->reserved!=SSTP_DATA_PACKET && header->reserved!=SSTP_CONTROL_PACKET)
+  if (header->reserved != SSTP_DATA_PACKET
+      && header->reserved != SSTP_CONTROL_PACKET)
     {
       if (cfg->verbose)
 	xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
@@ -84,7 +83,7 @@ int is_valid_header(void* recv_buf, ssize_t recv_len)
 
 int is_control_packet(sstp_header_t* packet_header)
 {
-  return (packet_header->reserved == 0x01);
+  return (packet_header->reserved == SSTP_CONTROL_PACKET);
 }
 
 
@@ -101,13 +100,13 @@ int https_session_negociation()
   generate_guid(guid);
   
   rbytes = snprintf(buf, read_size,
-		    "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n"
-		    "Host: AAAAAAAAAAAAAAAAAAAAAA.%s\r\n" // <-- bug : le hostname pas valide cote server 
-		    "SSTPCORRELATIONID: %s\r\n"
+		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
+		    "Host: AAAAAAAAAAAAAAAAAAAAAA.%s\r\n" // <-- note: le hostname pas valide cote server 
+		    "SSTPCORRELATIONID: 1111111%s\r\n" // <-- note: on peut mettre nawak aussi
 		    "Content-Length: %llu\r\n"
-		    "ClientBypassHLAuth: TRUE\r\n"
-		    "Cookie: ClientHTTPCookie=1 OR 1=1;\r\n"
+		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth: True\r\n"
 		    "\r\n",
+		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
 		    guid,
 		    __UNSIGNED_LONG_LONG_MAX__);
@@ -126,7 +125,7 @@ int https_session_negociation()
     }
   else if (rbytes == 0)
     {
-      xlog(LOG_INFO , "Connection has been closed by beer.\n");
+      xlog(LOG_INFO , "Connection closed by beer.\n");
       return -1;
     }
   else 
@@ -253,15 +252,13 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
   sstp_header_t* sstp_header;
   int is_control, retcode;
 
-  
-  if (!is_valid_header(rbuffer, sstp_length))
+  sstp_header = (sstp_header_t*) rbuffer;
+  if (!is_valid_header(sstp_header, sstp_length))
     {
       xlog(LOG_ERROR, "SSTP packet has invalid header. Dropped\n");
       return 0;
-    }
-    
+    } 
 
-  sstp_header = (sstp_header_t*) rbuffer;
   is_control = is_control_packet(sstp_header);
   
   if (cfg->verbose)
@@ -296,7 +293,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  return -1;
 	}
 
-      if (!control_type || control_type > SSTP_MSG_ECHO_REPLY)
+      if (!control_type || control_type > SSTP_MSG_ECHO_REPONSE)
 	{
 	  xlog(LOG_ERROR, "Incorrect control packet\n");
 	  return -1;  
@@ -308,7 +305,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	{
 	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n", control_messages_types_str[control_type],
 	       control_type);
-	  xlog(LOG_INFO, "\t-> num_attr:%d\n", control_num_attributes);
+	  xlog(LOG_INFO, "\t-> attribute number: %d\n", control_num_attributes);
 	}
       
       switch (control_type)
@@ -346,7 +343,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	case SSTP_MSG_CALL_ABORT:
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
-
 	  break;
 	  
 	case SSTP_MSG_CALL_DISCONNECT:
@@ -358,13 +354,13 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  break;
 
 	case SSTP_MSG_ECHO_REQUEST:
-	  /* a implementer */
+	  if (ctx->state != CLIENT_CALL_CONNECTED) return -1;
+	  send_sstp_control_packet(SSTP_MSG_ECHO_REPONSE, NULL, 0, 0);
 	  break;
 	  
-	case SSTP_MSG_ECHO_REPLY:
+	case SSTP_MSG_ECHO_REPONSE:
 	  if (ctx->state != CLIENT_CALL_CONNECTED) return -1;
 	  alarm(0);
-
 	  break;
 	  
 	  /*
@@ -412,7 +408,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  /* and set hello timer */
 	  alarm(ctx->hello_timer.tv_sec);
 	  change_status(CLIENT_CALL_CONNECTED);
-	  
+
+	  send_sstp_control_packet(SSTP_MSG_ECHO_REQUEST, NULL, 0, 0);  
 	}
 
       retcode = write(1, data_ptr, sstp_length);
@@ -640,9 +637,14 @@ int crypto_set_binding(void* data)
   /* setting crypto properties */
   req = (sstp_attribute_crypto_bind_req_t*) data;
   hash = req->hash_bitmask;
-  
-  if ( hash!=CERT_HASH_PROTOCOL_SHA1 && hash!=CERT_HASH_PROTOCOL_SHA256)
+
+  switch(hash) 
     {
+    case CERT_HASH_PROTOCOL_SHA1:
+    case CERT_HASH_PROTOCOL_SHA256:
+      break;
+      
+    default:
       xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", hash);
       return -1;
     }
@@ -688,6 +690,7 @@ int crypto_set_certhash()
   unsigned char* (*HASH)();
   
   memset(buffer, 0, buffer_len);
+  memset(dst, 0, 32);
   
   /* export certificate to DER format */
   val = gnutls_x509_crt_export (certificate, GNUTLS_X509_FMT_DER, buffer, &buffer_len);
@@ -715,8 +718,12 @@ int crypto_set_certhash()
   HASH(buffer, buffer_len, dst);
   
   /* move hash to client context variable */
-  memcpy(ctx->certhash, dst, 8 * sizeof(uint32_t));
-  
+  i=0;
+  do 
+    {
+      ctx->certhash[i] = (*(uint32_t*) (dst+(4*i)));
+    } while (++i < 8);
+
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CA hash: 0x");
@@ -748,9 +755,13 @@ int crypto_set_cmac()
     cmac = PRF(hlak, seed, SHA1_MAC_LEN);
   else
     cmac = PRF(hlak, seed, SHA256_MAC_LEN);
- 
-  for (i=0;i<8;i++)
-    ctx->cmac[i] = htonl(*(uint32_t*)(cmac+(i*4)));
+
+  i = 0;
+  do 
+    {
+        ctx->cmac[i++] = (*(uint32_t*)(cmac+(i*4)));
+    } while (i < 8);
+       
   free(cmac);
   
   if (cfg->verbose)
@@ -827,11 +838,13 @@ int sstp_fork()
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
-  pppd_args[i++] = "noauth";
-  pppd_args[i++] = "nodefaultroute";
-  pppd_args[i++] = "9600"; 
+  pppd_args[i++] = "nodefaultroute"; 
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "nomppe";
+  pppd_args[i++] = "nomppe-40";
+  pppd_args[i++] = "nomppe-128";
+  pppd_args[i++] = "persist";
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
 
@@ -839,6 +852,12 @@ int sstp_fork()
     {
       pppd_args[i++] = "logfile";   pppd_args[i++] = cfg->logfile;
       pppd_args[i++] = "debug";
+    }
+
+  if (cfg->domain != NULL)
+    {
+      pppd_args[i++] = "domain";
+      pppd_args[i++] = cfg->domain;
     }
 
   pppd_args[i++] = NULL;
@@ -897,101 +916,37 @@ int sstp_fork()
 }
 
 
-/**
- * from : http://open1x.svn.sourceforge.net/svnroot/open1x/trunk/xsupplicant/src/eap_types/peap/peap_extensions.c
- * \brief PRF+ as defined by the Microsoft PEAP documentation.
- *
- * @param[in] key   The "TempKey" as defined by the Microsoft PEAP documentation
- *                                      (The first 40 octets of the TK)
- * @param[in] seed   The IPMK Seed.
- * @param[in] len   The minimum amount of result data we need to provide.
- *
- * \retval NULL on failure
- * \retval uint8_t* containing at least 'len' bytes
- **/
-
-uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len)
+uint8_t* PRF(char* key, char* seed, uint16_t len)
 {
-  uint8_t iterations = 0;
-  int i = 0;
   uint8_t *temp_data = NULL;
-  uint8_t last_val[20];
-  uint8_t *Tn = NULL;
-  uint8_t mac[20];
+  size_t temp_len = 0;
+  uint8_t prefix = 0x01;
+  uint8_t *mac = NULL;
   unsigned int mdlen = 0;
-  
   const EVP_MD* (*HASH)();
 
-  if (len == SHA1_MAC_LEN)
+  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
     HASH = &EVP_sha1;
   else
     HASH = &EVP_sha256; 
   
-  iterations = (len / 32);
-
-  if ((len % 32) != 0)
-    iterations++;   // We need a fractional amount of data, so round up.
-
-  Tn = (uint8_t*)xmalloc(iterations * 32);
-  temp_data = (uint8_t*) xmalloc(SSTP_CMAC_SEED_LEN + 3);
-  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);
-
-  temp_data[SSTP_CMAC_SEED_LEN] = 0x01;
+  temp_len = SSTP_CMAC_SEED_LEN + sizeof(uint16_t) + sizeof(uint8_t);
+  temp_data = (uint8_t*) xmalloc(temp_len);
   
-  // Malloc should have inited everything else to 0x00, so we don't need to set those.
-  HMAC(HASH(),
-       key, 32,
-       temp_data, (SSTP_CMAC_SEED_LEN + 3),
-       (unsigned char *)&mac, &mdlen);
+  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &prefix, sizeof(uint8_t));
+  
+  HMAC(HASH(), key, 32, temp_data, temp_len, (unsigned char *)mac, &mdlen);
 
   if (mdlen != len)
     {
       xlog(LOG_INFO, "The SHA1 hash function didn't return valid data!\n");
       free(temp_data);
-      free(Tn);
-
       return NULL;
     }
 
-  /* xlog(LOG_DEBUG, "Hash result : %d bytes\n", mdlen); */
-
-  memcpy(Tn, &mac[0], mdlen);     // Copy the initial data to Tn.
-  memcpy(&last_val[0], &mac[0], mdlen);
-
   free(temp_data);
-
-  if (iterations >= 2)
-    {
-      for (i = 2; i <= iterations; i++)
-	{
-	  temp_data = (uint8_t*) xmalloc(SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN + 3);
-	  
-	  memcpy(temp_data, last_val, SHA256_MAC_LEN);
-	  memcpy(&temp_data[SHA256_MAC_LEN], seed, SSTP_CMAC_SEED_LEN);
-
-	  temp_data[SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN] = i;
-
-	  // Malloc should have inited everything else to 0x00, so we don't need to set those.
-	  HMAC(EVP_sha1(), key, 40, temp_data,
-	       (SHA256_MAC_LEN + SSTP_CMAC_SEED_LEN + 3),
-	       (unsigned char *)&mac, &mdlen);
-	  
-	  if (mdlen != SHA256_MAC_LEN)
-	    {
-	      xlog(LOG_DEBUG, "SHA1 hash didn't return valid data in %s()!\n", __FUNCTION__);
-	      free(temp_data);
-	      free(Tn);
-	      return NULL;
-	    }
-	  
-	  free(temp_data);
-
-	  /* xlog(LOG_DEBUG, "Hash result %d bytes\n", mdlen); */
-	  
-	  memcpy(&last_val[0], &mac[0], SHA256_MAC_LEN);
-	  memcpy(&Tn[((i - 1) * SHA256_MAC_LEN)], &mac[0], SHA256_MAC_LEN);
-	}
-    }
   
-  return Tn;
+  return mac;
 }

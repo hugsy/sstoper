@@ -35,6 +35,7 @@ typedef struct
   char* password;
   char* logfile;
   char* pppd_path;
+  char* domain;  
 } sstp_config;
 
 gnutls_session_t tls;

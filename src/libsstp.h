@@ -11,10 +11,12 @@
 #define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
    
 /* SSTP Properties */
+#define SSTP_HTTPS_RESOURCE "/sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/"
 #define SSTP_VERSION 0x10
 #define SSTP_MIN_LEN 4 
 #define SSTP_MAX_ATTR 256
-#define SSTP_NEGOCIATION_TIMER 30
+#define SSTP_NEGOCIATION_TIMER 60
+#define SSTP_PING_TIMER 30
 #define SSTP_MAX_BUFFER_SIZE 1024
 
 #define SSTP_CMAC_SEED_STR  "SSTP inner method derived CMK"
@@ -50,9 +52,9 @@ enum control_messages_types
     SSTP_MSG_CALL_DISCONNECT = 0x0006,
     SSTP_MSG_CALL_DISCONNECT_ACK = 0x0007,
     SSTP_MSG_ECHO_REQUEST = 0x0008,
-    SSTP_MSG_ECHO_REPLY = 0x0009
+    SSTP_MSG_ECHO_REPONSE = 0x0009
   };
-static UNUSED char* control_messages_types_str[] =
+const static UNUSED char* control_messages_types_str[] =
   {"",
    "SSTP_MSG_CALL_CONNECT_REQUEST",
    "SSTP_MSG_CALL_CONNECT_ACK",
@@ -62,7 +64,7 @@ static UNUSED char* control_messages_types_str[] =
    "SSTP_MSG_CALL_DISCONNECT",
    "SSTP_MSG_CALL_DISCONNECT_ACK",
    "SSTP_MSG_ECHO_REQUEST",
-   "SSTP_MSG_ECHO_REPLY",
+   "SSTP_MSG_ECHO_REPONSE",
   };
 
 
@@ -75,7 +77,7 @@ enum attr_types
     SSTP_ATTRIB_CRYPTO_BINDING = 0x03,
     SSTP_ATTRIB_CRYPTO_BINDING_REQ = 0x04
   };
-static UNUSED char* attr_types_str[] =
+const static UNUSED char* attr_types_str[] =
   {
     "SSTP_ATTRIB_NO_ERROR", 
     "SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID",
@@ -115,7 +117,7 @@ enum attr_status
     ATTRIB_STATUS_REQUIRED_ATTRIBUTE_MISSING = 0x0000000a,
     ATTRIB_STATUS_STATUS_INFO_NOT_SUPPORTED_IN_MSG = 0x0000000b
   };
-static UNUSED char* attrib_status_str[] =
+const static UNUSED char* attrib_status_str[] =
   {
     "ATTRIB_STATUS_NO_ERROR",
     "ATTRIB_STATUS_DUPLICATE_ATTRIBUTE",
@@ -140,7 +142,7 @@ enum client_status
     CLIENT_CONNECT_ACK_RECEIVED,
     CLIENT_CALL_CONNECTED
   };
-static UNUSED char* client_status_str[] =
+const static UNUSED char* client_status_str[] =
   {
     "CLIENT_CALL_DISCONNECTED",
     "CLIENT_CONNECT_REQUEST_SENT",
@@ -178,10 +180,12 @@ typedef struct __sstp_attribute
 } sstp_attribute_t;
 
 /* uint24_t n'existe pas */
+#ifndef uint24_t
 typedef struct _uint24_t
 {
   uint8_t byte[3];
 } uint24_t;
+#endif
 
 typedef struct __sstp_attribute_crypto_bind_req
 {
@@ -226,7 +230,7 @@ static sstp_context_t* ctx;
 
 /* functions declarations  */
 void generate_guid(char data[]);
-int is_valid_header(void* recv_buf, ssize_t recv_len);
+int is_valid_header(sstp_header_t* header, ssize_t recv_len);
 int is_control_packet(sstp_header_t* packet_header);
 int https_session_negociation();
 void initialize_sstp();
@@ -246,5 +250,5 @@ int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
 
 /* exp */
-uint8_t * PRF(uint8_t * key, uint8_t * seed, uint8_t len);
+uint8_t* PRF(char* key, char* seed, uint16_t len);
 

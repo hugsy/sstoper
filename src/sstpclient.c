@@ -78,7 +78,7 @@ void usage(char* name, int retcode)
     fd = stderr;
       
   fprintf(fd,
-	  "SSTPClient: SSTP VPN client for *nix\n"
+	  "SSTPClient: SSTP VPN client for Linux\n"
 	  "Usage: %s [ARGUMENTS]\n"
 	  "\t-s, --server <sstp.server.address> (mandatory)\tSSTP Server\n"
 	  "\t-c, --ca-file /path/to/ca_file (mandatory)\tTrusted CA file (only PEM format supported)\n"
@@ -88,6 +88,7 @@ void usage(char* name, int retcode)
 	  "\t-x, --pppd-path /path/to/pppd \tSpecifies path to pppd executable (default: /usr/sbin/pppd)\n"
 	  "\t-v, --verbose\tVerbose mode\n"
 	  "\t-l, --logfile /path/to/pppd_logfile\tLog pppd activity in specified file\n"
+	  "\t-d, --domain MyWindowsDomain\tSpecify Windows domain for authentication\n"	  
 	  "\t-h, --help\tShow this menu\n"
 	  "\n\n",
 	  name);
@@ -110,6 +111,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
     { "password",  1, 0, 'P' },
     { "pppd-path", 1, 0, 'x' },
     { "logfile",   1, 0, 'l' },
+    { "domain",    1, 0, 'd' },    
     { 0, 0, 0, 0 } 
   };
 
@@ -118,7 +120,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:x:l:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:x:l:d:", long_opts, &curopt_idx);
 
       if (curopt == -1) break;
       
@@ -133,6 +135,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	case 'P': cfg->password = optarg; break;
 	case 'x': cfg->pppd_path = optarg; break;	  
 	case 'l': cfg->logfile = optarg; break;
+	case 'd': cfg->domain = optarg; break;	  
   	case '?':
 	default:
 	  usage (argv[0], EXIT_FAILURE);
@@ -363,7 +366,7 @@ void sighandle(int signum)
   switch(signum) 
     {
     case SIGALRM:
-      xlog(LOG_INFO, "Negociation timer ends\n");
+      xlog(LOG_INFO, "Timer ends\n");
       break;
 
     case SIGCHLD:
