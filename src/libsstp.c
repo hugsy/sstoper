@@ -665,7 +665,7 @@ int crypto_set_binding(void* data)
       for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);
       xlog(LOG_INFO, "\n");
     }
-  
+
   /* compute ca file hash with chosen algorithm */
   if (crypto_set_certhash() < 0)
     return -1;
@@ -673,7 +673,7 @@ int crypto_set_binding(void* data)
   /* compute compound mac according to spec */
   if (crypto_set_cmac() < 0)
     return -1;
-  
+
   /* change client state */
   change_status(CLIENT_CONNECT_ACK_RECEIVED);
 
@@ -721,8 +721,8 @@ int crypto_set_certhash()
   i=0;
   do 
     {
-      ctx->certhash[i] = (*(uint32_t*) (dst+(4*i)));
-    } while (++i < 8);
+      ctx->certhash[i++] = (*(uint32_t*)(dst+(i*4)));
+    } while (i < 8);
 
   if (cfg->verbose)
     {
@@ -746,24 +746,23 @@ int crypto_set_cmac()
    * `If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
    * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
    * 0x00.`
-   * Ok, that what will do. HLAK is zero-ed.
    */
   memset(hlak, 0, 32 * sizeof(uint8_t));
   memcpy(seed, SSTP_CMAC_SEED_STR, SSTP_CMAC_SEED_LEN);
-  
+
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
     cmac = PRF(hlak, seed, SHA1_MAC_LEN);
   else
     cmac = PRF(hlak, seed, SHA256_MAC_LEN);
 
-  i = 0;
+  i=0;
   do 
     {
-        ctx->cmac[i++] = (*(uint32_t*)(cmac+(i*4)));
+      ctx->cmac[i++] = ntohl(*(uint32_t*)(cmac+(i*4)));
     } while (i < 8);
-       
-  free(cmac);
   
+  free(cmac);
+
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> CMac: 0x");
@@ -929,15 +928,17 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
     HASH = &EVP_sha1;
   else
     HASH = &EVP_sha256; 
-  
+
+  mac = (uint8_t*) xmalloc(len);
+
   temp_len = SSTP_CMAC_SEED_LEN + sizeof(uint16_t) + sizeof(uint8_t);
   temp_data = (uint8_t*) xmalloc(temp_len);
-  
-  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);
+
+  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN); 
   memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
-  memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &prefix, sizeof(uint8_t));
-  
-  HMAC(HASH(), key, 32, temp_data, temp_len, (unsigned char *)mac, &mdlen);
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t));
+
+  HMAC(HASH(), key, 32, temp_data, temp_len, (unsigned char*)mac, &mdlen);
 
   if (mdlen != len)
     {
@@ -948,5 +949,5 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
 
   free(temp_data);
   
-  return mac;
+  return mac; 
 }
