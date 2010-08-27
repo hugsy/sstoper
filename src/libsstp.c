@@ -182,6 +182,10 @@ void sstp_loop()
   ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->pppd_pid = -1;
 
+  /* initialize chap context */
+  chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
+  
+
   read_max_size = gnutls_record_get_max_size(tls);
   
 
@@ -380,37 +384,48 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
     {
       void* data_ptr;
       data_ptr = rbuffer + sizeof(sstp_header_t);
+
+      /*
+       * http://tools.ietf.org/search/rfc2759#section-4
+       */
       
-      /* if PPP-CHAP is successful*/
-      if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 &&
-	   (*(uint8_t*)(data_ptr + 2)) == 0x03 )
+      if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 )
 	{
-	  size_t attribute_len;
-	  void* attribute;
-	  sstp_attribute_crypto_bind_t crypto_settings;
+	  uint8_t chap_handshake_code = *(uint8_t*)(data_ptr + 2);
 
-	  memset(&crypto_settings, 0, sizeof(sstp_attribute_crypto_bind_t));
+	  /* if Success on PPP-CHAP */	
+	  if (chap_handshake_code == 0x03 )
+	    {
+	      size_t attribute_len;
+	      void* attribute;
+	      sstp_attribute_crypto_bind_t crypto_settings;
 
-	  /* send SSTP_MSG_CALL_CONNECTED */
-	  attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
-	  crypto_settings.hash_bitmask = ctx->hash_algorithm;
-	  memcpy(crypto_settings.nonce, ctx->nonce, sizeof(uint32_t)*8);
-	  memcpy(crypto_settings.certhash, ctx->certhash, sizeof(uint32_t)*8);
-	  memcpy(crypto_settings.cmac, ctx->cmac, sizeof(uint32_t)*8);
-	  
-	  attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, &crypto_settings,
-				       sizeof(sstp_attribute_crypto_bind_t));
-	  
-	  send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
-
-	  free(attribute);
-
-	  /* and set hello timer */
-	  alarm(ctx->hello_timer.tv_sec);
-	  change_status(CLIENT_CALL_CONNECTED);
-
-	  send_sstp_control_packet(SSTP_MSG_ECHO_REQUEST, NULL, 0, 0);  
+	      /* compute cmac */
+	      if (crypto_set_cmac() < 0)
+		return -1;
+	      
+	      memset(&crypto_settings, 0, sizeof(sstp_attribute_crypto_bind_t));
+	      
+	      /* send SSTP_MSG_CALL_CONNECTED */
+	      attribute_len = sizeof(sstp_attribute_header_t) + sizeof(sstp_attribute_crypto_bind_t);
+	      crypto_settings.hash_bitmask = ctx->hash_algorithm;
+	      memcpy(crypto_settings.nonce, ctx->nonce, sizeof(uint32_t)*8);
+	      memcpy(crypto_settings.certhash, ctx->certhash, sizeof(uint32_t)*8);
+	      memcpy(crypto_settings.cmac, ctx->cmac, sizeof(uint32_t)*8);
+	      
+	      attribute = create_attribute(SSTP_ATTRIB_CRYPTO_BINDING, &crypto_settings,
+					   sizeof(sstp_attribute_crypto_bind_t));
+	      
+	      send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
+	      
+	      free(attribute);
+	      
+	      /* and set hello timer */
+	      alarm(ctx->hello_timer.tv_sec);
+	      change_status(CLIENT_CALL_CONNECTED);
+	    }
 	}
+      
 
       retcode = write(1, data_ptr, sstp_length);
 
@@ -541,6 +556,18 @@ void send_sstp_packet(uint8_t type, void* data, size_t data_length)
 
 void send_sstp_data_packet(void* data, size_t len) 
 {
+  if ( ntohs(*((uint16_t*)data)) == 0xc223 )
+    {
+      uint8_t chap_handshake_code = *(uint8_t*)(data + 2);
+
+      /* if msg is PPP-CHAP response */	
+      if (chap_handshake_code == 0x02 )
+	{
+	  memcpy((void*)&chap_ctx->response_challenge, data + 7, 49);
+	}
+    }
+  
+
   send_sstp_packet(SSTP_DATA_PACKET, data, len);
 }
 
@@ -671,8 +698,9 @@ int crypto_set_binding(void* data)
     return -1;
 
   /* compute compound mac according to spec */
-  if (crypto_set_cmac() < 0)
-    return -1;
+  /* if (crypto_set_cmac() < 0) */
+    /* return -1; */
+  /* is done after ppp negociation */
 
   /* change client state */
   change_status(CLIENT_CONNECT_ACK_RECEIVED);
@@ -735,19 +763,71 @@ int crypto_set_certhash()
 }
 
 
+#include <openssl/md4.h>
+#define NT_PASSWORD_HASH(src, dst) ((MD4(src, strlen(src), dst)))
+#define HASH_NT_PASSWORD_HASH(src, dst) ((MD4(src, MD4_DIGEST_LENGTH, dst)))
+
 int crypto_set_cmac()
 { 
-  uint8_t hlak[32];
+  unsigned char hlak[32];
   int i;
   uint8_t *cmac;
   uint8_t seed[SSTP_CMAC_SEED_LEN];
+
   
-  /*
-   * `If the higher-layer PPP authentication method did not generate any keys, or if PPP authentication
-   * is bypassed (i.e. ClientBypassHLAuth is set to TRUE), then the HLAK MUST be 32 octets of
-   * 0x00.`
-   */
-  memset(hlak, 0, 32 * sizeof(uint8_t));
+  /* crypto time (http://tools.ietf.org/search/rfc2759#section-8.3) */
+  unsigned char PasswordHash[MD4_DIGEST_LENGTH];
+  unsigned char PasswordHashHash[MD4_DIGEST_LENGTH];
+  unsigned char NT_Response[24];
+  unsigned char Master_Key[16];
+  unsigned char Master_Send_Key[16];
+  unsigned char Master_Receive_Key[16];
+  
+  memset(PasswordHash, 0, MD4_DIGEST_LENGTH);
+  memset(PasswordHashHash, 0, MD4_DIGEST_LENGTH);
+  memset(NT_Response, 0, 24);
+
+  NT_PASSWORD_HASH(cfg->password, PasswordHash);
+  HASH_NT_PASSWORD_HASH(PasswordHash, PasswordHashHash);
+  memcpy(NT_Response, chap_ctx->response_nt_response, 24);
+  GetMasterKey(PasswordHashHash, NT_Response, Master_Key);
+  GetAsymmetricStartKey(Master_Key, Master_Send_Key, 16, 1, 1);
+  GetAsymmetricStartKey(Master_Key, Master_Receive_Key, 16, 0, 1);
+  
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "Password: %s (%d)\n", cfg->password, strlen(cfg->password));
+      
+      xlog(LOG_INFO, "PasswordHash: 0x");
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
+      xlog(LOG_INFO, "\n");
+      
+      xlog(LOG_INFO, "PasswordHashHash: 0x");
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHashHash[i]);
+      xlog(LOG_INFO, "\n");
+      
+      xlog(LOG_INFO, "NT_Response: 0x");
+      for (i=0; i<24; i++) xlog(LOG_INFO, "%.2x", NT_Response[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "Master Key: 0x");
+      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Key[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "Master Send Key: 0x");
+      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Send_Key[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "Master Receive Key: 0x");
+      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Receive_Key[i]);
+      xlog(LOG_INFO, "\n");
+    }
+
+  /* setting HLAK */
+  memcpy(hlak, Master_Send_Key, 16 * sizeof(char));
+  memcpy(hlak+16, Master_Receive_Key, 16 * sizeof(char));
+  
+  /* setting Seed */
   memcpy(seed, SSTP_CMAC_SEED_STR, SSTP_CMAC_SEED_LEN);
 
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
@@ -756,7 +836,9 @@ int crypto_set_cmac()
     cmac = PRF(hlak, seed, SHA256_MAC_LEN);
 
   i=0;
-  do 
+  /* memcpy(ctx->cmac, cmac, 32); */
+  
+  do
     {
       ctx->cmac[i++] = ntohl(*(uint32_t*)(cmac+(i*4)));
     } while (i < 8);
@@ -765,7 +847,7 @@ int crypto_set_cmac()
 
   if (cfg->verbose)
     {
-      xlog(LOG_INFO, "\t\t--> CMac: 0x");
+      xlog(LOG_INFO, "CMac: 0x");
       for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->cmac[i]);
       xlog(LOG_INFO, "\n");
     }
@@ -837,13 +919,11 @@ int sstp_fork()
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
-  pppd_args[i++] = "nodefaultroute"; 
+  pppd_args[i++] = "nodefaultroute";
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
-  pppd_args[i++] = "nomppe";
-  pppd_args[i++] = "nomppe-40";
-  pppd_args[i++] = "nomppe-128";
-  pppd_args[i++] = "persist";
+  pppd_args[i++] = "show-password";
+  pppd_args[i++] = "require-mppe-128";
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
 
@@ -915,6 +995,7 @@ int sstp_fork()
 }
 
 
+
 uint8_t* PRF(char* key, char* seed, uint16_t len)
 {
   uint8_t *temp_data = NULL;
@@ -925,11 +1006,13 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
   unsigned int mdlen = 0;
   const EVP_MD* (*HASH)();
 
+
   if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
     HASH = &EVP_sha1;
   else
     HASH = &EVP_sha256; 
 
+  
   mac = (uint8_t*) xmalloc(len);
 
   temp_len = SSTP_CMAC_SEED_LEN + sizeof(uint16_t) + sizeof(uint8_t);
@@ -942,6 +1025,7 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
    * T2 = HMAC-SHA256 (K, T1 | S | LEN | 0x02)
    * ...
    */
+  i = 0x01;
   memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN); 
   memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
   memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t));
@@ -958,4 +1042,56 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
   free(temp_data);
   
   return mac; 
+}
+
+
+/*
+ * From http://tools.ietf.org/search/rfc3079
+ */
+void GetMasterKey(void* PasswordHashHash, void* NTResponse, void* MasterKey)
+{
+  SHA_CTX Context;
+  unsigned char Digest[20];
+  
+  memset(Digest, 0, sizeof(Digest));
+
+  SHA1_Init(&Context);
+  SHA1_Update(&Context, PasswordHashHash, 16);
+  SHA1_Update(&Context, NTResponse, 24);
+  SHA1_Update(&Context, Magic1, 27);
+  SHA1_Final(Digest, &Context);
+  
+  memcpy(MasterKey, Digest, 16);
+}
+
+
+void GetAsymmetricStartKey(void* MasterKey, void* MasterSessionKey, 
+			   uint8_t KeyLength, uint8_t IsSend, uint8_t IsServer)
+{
+  unsigned char Digest[20];
+  unsigned char *Magic;
+  SHA_CTX Context;
+
+  memset(Digest,0,20);
+  
+  if (IsSend)
+    if (IsServer) 
+      Magic = Magic3;
+    else
+      Magic = Magic2;
+  else
+    if (IsServer)
+      Magic = Magic2;
+    else
+      Magic = Magic3;
+
+
+  SHA1_Init(&Context);
+  SHA1_Update(&Context, MasterKey, 16);
+  SHA1_Update(&Context, SHSpad1, 40);
+  SHA1_Update(&Context, Magic, 84);
+  SHA1_Update(&Context, SHSpad2, 40);
+  SHA1_Final(Digest, &Context);
+  
+  memcpy(MasterSessionKey, Digest, KeyLength);
 }
