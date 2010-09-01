@@ -15,6 +15,7 @@
 #include <openssl/sha.h>
 #include <openssl/md4.h>
 #include <openssl/hmac.h>
+#include <openssl/md4.h>
 #include <gnutls/x509.h>
 
 #include "libsstp.h"
@@ -33,13 +34,13 @@ void generate_guid(char data[])
   data2 = (rand() + 1) * (sizeof(uint16_t) * 8);
   data3 = (rand() + 1) * (sizeof(uint16_t) * 8);
   data4 = (rand() + 1) * (sizeof(uint32_t) * 8);
-  snprintf(data, 38, "{%.2X-%.2X-%.2X-%.2X}", data1, data2, data3, data4);
+  snprintf(data, 38, "{%.4X-%.2X-%.2X-%.4X}", data1, data2, data3, data4);
 
   if (cfg->verbose) xlog(LOG_INFO, "Using GUID %s\n", data);
 }
 
 
-void change_status(uint8_t status)
+void set_client_status(uint8_t status)
 {
   ctx->state = status;
 
@@ -68,7 +69,7 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
     }
 
   /*
-   * bug server sstp ou ppp (fixme)
+   * note : bug server sstp ou ppp
    * le 1er packet ppp recu du serveur possede une taille de paquet differente de celle
    * annonce dans le header sstp -> test de la taille echoue 
    */
@@ -103,8 +104,8 @@ int https_session_negociation()
   
   rbytes = snprintf(buf, read_size,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
-		    "Host: AAAAAAAAAAAAAAAAAAAAAA.%s\r\n" // <-- note: le hostname pas valide cote server 
-		    "SSTPCORRELATIONID: 1111111%s\r\n" // <-- note: on peut mettre nawak aussi
+		    "Host: whatever.here.%s\r\n" // <-- note: le hostname pas valide cote server 
+		    "SSTPCORRELATIONID: {nawak}%s\r\n" // <-- note: on peut mettre nawak aussi
 		    "Content-Length: %llu\r\n"
 		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth: True\r\n"
 		    "\r\n",
@@ -164,7 +165,7 @@ void initialize_sstp()
 
   /* set alarm and change state */
   alarm(ctx->negociation_timer.tv_sec);
-  change_status(CLIENT_CONNECT_REQUEST_SENT);
+  set_client_status(CLIENT_CONNECT_REQUEST_SENT);
 
 }
 
@@ -174,7 +175,9 @@ void sstp_loop()
   size_t read_max_size;
   fd_set msrd;
   int retcode;
-  
+
+  /* set buffer max len receive */
+  read_max_size = gnutls_record_get_max_size(tls);
   
   /* initialize sstp context */
   ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
@@ -186,11 +189,8 @@ void sstp_loop()
 
   /* initialize chap context */
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
-  
 
-  read_max_size = gnutls_record_get_max_size(tls);
   
-
   /* start sstp negociation */
   initialize_sstp();
 
@@ -424,7 +424,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      
 	      /* and set hello timer */
 	      alarm(ctx->hello_timer.tv_sec);
-	      change_status(CLIENT_CALL_CONNECTED);
+	      set_client_status(CLIENT_CALL_CONNECTED);
 	    }
 	}
       
@@ -699,9 +699,9 @@ int crypto_set_binding(void* data)
   if (crypto_set_certhash() < 0)
     return -1;
 
-  
+
   /* change client state */
-  change_status(CLIENT_CONNECT_ACK_RECEIVED);
+  set_client_status(CLIENT_CONNECT_ACK_RECEIVED);
 
   return 0;
 }
@@ -744,11 +744,10 @@ int crypto_set_certhash()
   HASH(buffer, buffer_len, dst);
   
   /* move hash to client context variable */
-  i=0;
-  do 
-    {
-      ctx->certhash[i++] = (*(uint32_t*)(dst+(i*4)));
-    } while (i < 8);
+  /* 86695fbe4cf54df5eae881b65148357559e9d28a7b7c1845da91778150bfb991 */
+  for(i=0; i<8; i++)
+    ctx->certhash[i] = *(uint32_t*)(dst+(i*4));
+
 
   if (cfg->verbose)
     {
@@ -764,7 +763,7 @@ int crypto_set_certhash()
 int crypto_set_cmac()
 { 
   unsigned char hlak[32];
-  int i;
+  unsigned int i=0;
   uint8_t *cmac;
   uint8_t seed[SSTP_CMAC_SEED_LEN];
 
@@ -781,70 +780,80 @@ int crypto_set_cmac()
   memset(PasswordHashHash, 0, MD4_DIGEST_LENGTH);
   memset(NT_Response, 0, 24);
 
-  NT_PASSWORD_HASH(cfg->password, PasswordHash);
-  HASH_NT_PASSWORD_HASH(PasswordHash, PasswordHashHash);
+  /* setting HLAK */
+  NtPasswordHash(cfg->password, strlen(cfg->password), PasswordHash);
+  HashNtPasswordHash(PasswordHash, PasswordHashHash);
   memcpy(NT_Response, chap_ctx->response_nt_response, 24);
   GetMasterKey(PasswordHashHash, NT_Response, Master_Key);
-  GetAsymmetricStartKey(Master_Key, Master_Send_Key, 16, 1, 1);
-  GetAsymmetricStartKey(Master_Key, Master_Receive_Key, 16, 0, 1);
-  
-  if (cfg->verbose)
-    {
-      xlog(LOG_INFO, "Password: %s (%d)\n", cfg->password, strlen(cfg->password));
-      
-      xlog(LOG_INFO, "PasswordHash: 0x");
-      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
-      xlog(LOG_INFO, "\n");
-      
-      xlog(LOG_INFO, "PasswordHashHash: 0x");
-      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHashHash[i]);
-      xlog(LOG_INFO, "\n");
-      
-      xlog(LOG_INFO, "NT_Response: 0x");
-      for (i=0; i<24; i++) xlog(LOG_INFO, "%.2x", NT_Response[i]);
-      xlog(LOG_INFO, "\n");
+  GetAsymmetricStartKey(Master_Send_Key, Master_Key, 16, 1, 1);
+  GetAsymmetricStartKey(Master_Receive_Key, Master_Key,  16, 0, 1);
 
-      xlog(LOG_INFO, "Master Key: 0x");
-      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Key[i]);
-      xlog(LOG_INFO, "\n");
+  memcpy(hlak, Master_Send_Key, 16*sizeof(char));
+  memcpy(hlak+16, Master_Receive_Key, 16*sizeof(char));
 
-      xlog(LOG_INFO, "Master Send Key: 0x");
-      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Send_Key[i]);
-      xlog(LOG_INFO, "\n");
-
-      xlog(LOG_INFO, "Master Receive Key: 0x");
-      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Receive_Key[i]);
-      xlog(LOG_INFO, "\n");
-    }
-
-  /* setting HLAK */
-  memcpy(hlak, Master_Send_Key, 16 * sizeof(char));
-  memcpy(hlak+16, Master_Receive_Key, 16 * sizeof(char));
   
   /* setting Seed */
   memcpy(seed, SSTP_CMAC_SEED_STR, SSTP_CMAC_SEED_LEN);
 
-  if (ctx->hash_algorithm == CERT_HASH_PROTOCOL_SHA1)
-    cmac = PRF(hlak, seed, SHA1_MAC_LEN);
-  else
-    cmac = PRF(hlak, seed, SHA256_MAC_LEN);
 
-  i=0;
+  /* computing cmac */
+  switch (ctx->hash_algorithm) {
+  case CERT_HASH_PROTOCOL_SHA1:
+    cmac = PRF(hlak, seed, SHA1_MAC_LEN);
+    break;
+
+  case CERT_HASH_PROTOCOL_SHA256:
+    cmac = PRF(hlak, seed, SHA256_MAC_LEN);
+    break;
+  }
+
+  for(i=0;i<8;i++)
+    ctx->cmac[i] = *((uint32_t*)(cmac+(i*4)));
+
   /* memcpy(ctx->cmac, cmac, 32); */
-  
-  do
-    {
-      ctx->cmac[i++] = ntohl(*(uint32_t*)(cmac+(i*4)));
-    } while (i < 8);
   
   free(cmac);
 
-  if (cfg->verbose)
-    {
-      xlog(LOG_INFO, "CMac: 0x");
-      for(i=0;i<8;i++) xlog(LOG_INFO, "%x", ctx->cmac[i]);
+  /* debug */
+  /* if (cfg->verbose) */
+    /* { */
+      
+      xlog(LOG_INFO, "H(Pwd)\t 0x");
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
       xlog(LOG_INFO, "\n");
-    }
+      
+      xlog(LOG_INFO, "H(H)\t 0x");
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHashHash[i]);
+      xlog(LOG_INFO, "\n");
+      
+      xlog(LOG_INFO, "NT_Rsp\t 0x");
+      for (i=0; i<24; i++) xlog(LOG_INFO, "%.2x", NT_Response[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "MKey\t 0x");
+      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Key[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "MSK\t 0x");
+      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Send_Key[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "MRK\t 0x");
+      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Receive_Key[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "HLAK\t 0x");
+      for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", hlak[i]);
+      xlog(LOG_INFO, "\n");
+      
+      xlog(LOG_INFO, "Seed\t 0x");
+      for (i=0; i<SSTP_CMAC_SEED_LEN; i++) xlog(LOG_INFO, "%.2x", seed[i]);
+      xlog(LOG_INFO, "\n");
+
+      xlog(LOG_INFO, "CMac\t 0x");
+      for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ctx->cmac[i]);
+      xlog(LOG_INFO, "\n");
+    /* } */
   
   return 0;
 }
@@ -916,8 +925,6 @@ int sstp_fork()
   pppd_args[i++] = "nodefaultroute";
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
-  pppd_args[i++] = "show-password";
-  pppd_args[i++] = "require-mppe-128";
   pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
 
@@ -993,7 +1000,6 @@ int sstp_fork()
 uint8_t* PRF(char* key, char* seed, uint16_t len)
 {
   uint8_t *temp_data = NULL;
-  uint8_t i=0x01;
   size_t temp_len = 0;
   uint8_t prefix = 0x01;
   uint8_t *mac = NULL;
@@ -1019,25 +1025,54 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
    * T2 = HMAC-SHA256 (K, T1 | S | LEN | 0x02)
    * ...
    */
-  i = 0x01;
-  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN); 
-  memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
-  memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t));
+  /* memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);  */
+  /* memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t)); */
+  /* memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t)); */
 
-  HMAC(HASH(), key, 32, temp_data, temp_len, (unsigned char*)mac, &mdlen);
+  /* nagawika */
+  memcpy(temp_data, &prefix, sizeof(uint8_t));
+  memcpy(temp_data+sizeof(uint8_t), &len, sizeof(uint16_t));
+  memcpy(temp_data+sizeof(uint8_t)+sizeof(uint16_t), seed, SSTP_CMAC_SEED_LEN);
 
-  if (mdlen != len)
-    {
-      xlog(LOG_INFO, "The SHA1 hash function didn't return valid data!\n");
-      free(temp_data);
-      return NULL;
-    }
+  HMAC(HASH(), key, 32, temp_data, temp_len, (uint8_t*)mac, &mdlen);
 
   free(temp_data);
+  
+  if (mdlen != len)
+    {
+      xlog(LOG_INFO, "%s function didn't return valid data!\n",
+	   crypto_req_attrs_str[ctx->hash_algorithm]);
+      return NULL;
+    }
   
   return mac; 
 }
 
+
+void NtPasswordHash(const uint8_t *password, size_t password_len, uint8_t *password_hash)
+{
+  uint8_t buf[512];
+  size_t i;
+    
+  if (password_len > 256)
+    {
+      password_hash = NULL;
+      return;
+    }   
+
+  memset(buf, 0, 512);
+  
+  /* Convert password into unicode */
+  for (i = 0; i < password_len; i++) 
+    buf[2 * i] = password[i];
+
+  MD4(buf, password_len * 2, password_hash);
+}
+
+void HashNtPasswordHash(const uint8_t *password_hash, uint8_t *password_hash_hash)
+{
+  MD4(password_hash, MD4_DIGEST_LENGTH, password_hash_hash);
+}
 
 /*
  * From http://tools.ietf.org/search/rfc3079
@@ -1047,6 +1082,17 @@ void GetMasterKey(void* PasswordHashHash, void* NTResponse, void* MasterKey)
   SHA_CTX Context;
   unsigned char Digest[20];
   
+  /*
+   * "Magic" constants used in key derivations
+   */
+  
+  static unsigned char Magic1[27] =
+    {
+      0x54, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x74,
+      0x68, 0x65, 0x20, 0x4d, 0x50, 0x50, 0x45, 0x20, 0x4d,
+      0x61, 0x73, 0x74, 0x65, 0x72, 0x20, 0x4b, 0x65, 0x79
+    };
+
   memset(Digest, 0, sizeof(Digest));
 
   SHA1_Init(&Context);
@@ -1059,25 +1105,69 @@ void GetMasterKey(void* PasswordHashHash, void* NTResponse, void* MasterKey)
 }
 
 
-void GetAsymmetricStartKey(void* MasterKey, void* MasterSessionKey, 
+void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey, 
 			   uint8_t KeyLength, uint8_t IsSend, uint8_t IsServer)
 {
   unsigned char Digest[20];
   unsigned char *Magic;
   SHA_CTX Context;
 
-  memset(Digest,0,20);
+  /*
+   * Pads used in key derivation
+   */
+  static unsigned char SHSpad1[40] =
+    {
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
+  static unsigned char SHSpad2[40] =
+    {
+      0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2,
+      0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2,
+      0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2,
+      0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2
+    };
+
+  /*
+   * "Magic" constants used in key derivations
+   */
+  
+  static unsigned char Magic2[84] =
+    {
+      0x4f, 0x6e, 0x20, 0x74, 0x68, 0x65, 0x20, 0x63, 0x6c, 0x69,
+      0x65, 0x6e, 0x74, 0x20, 0x73, 0x69, 0x64, 0x65, 0x2c, 0x20,
+      0x74, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x74, 0x68,
+      0x65, 0x20, 0x73, 0x65, 0x6e, 0x64, 0x20, 0x6b, 0x65, 0x79,
+      0x3b, 0x20, 0x6f, 0x6e, 0x20, 0x74, 0x68, 0x65, 0x20, 0x73,
+      0x65, 0x72, 0x76, 0x65, 0x72, 0x20, 0x73, 0x69, 0x64, 0x65,
+      0x2c, 0x20, 0x69, 0x74, 0x20, 0x69, 0x73, 0x20, 0x74, 0x68,
+      0x65, 0x20, 0x72, 0x65, 0x63, 0x65, 0x69, 0x76, 0x65, 0x20,
+      0x6b, 0x65, 0x79, 0x2e
+    };
+
+  static unsigned char Magic3[84] =
+    {
+      0x4f, 0x6e, 0x20, 0x74, 0x68, 0x65, 0x20, 0x63, 0x6c, 0x69,
+      0x65, 0x6e, 0x74, 0x20, 0x73, 0x69, 0x64, 0x65, 0x2c, 0x20,
+      0x74, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x74, 0x68,
+      0x65, 0x20, 0x72, 0x65, 0x63, 0x65, 0x69, 0x76, 0x65, 0x20,
+      0x6b, 0x65, 0x79, 0x3b, 0x20, 0x6f, 0x6e, 0x20, 0x74, 0x68,
+      0x65, 0x20, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x20, 0x73,
+      0x69, 0x64, 0x65, 0x2c, 0x20, 0x69, 0x74, 0x20, 0x69, 0x73,
+      0x20, 0x74, 0x68, 0x65, 0x20, 0x73, 0x65, 0x6e, 0x64, 0x20,
+      0x6b, 0x65, 0x79, 0x2e
+    };
+ 
+  memset(Digest, 0, 20);
   
   if (IsSend)
-    if (IsServer) 
-      Magic = Magic3;
-    else
-      Magic = Magic2;
+    Magic = (IsServer? Magic3 : Magic2);
+      
   else
-    if (IsServer)
-      Magic = Magic2;
-    else
-      Magic = Magic3;
+    Magic = (IsServer? Magic2 : Magic3);
 
 
   SHA1_Init(&Context);
@@ -1089,3 +1179,4 @@ void GetAsymmetricStartKey(void* MasterKey, void* MasterSessionKey,
   
   memcpy(MasterSessionKey, Digest, KeyLength);
 }
+
