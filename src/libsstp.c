@@ -13,11 +13,13 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <openssl/sha.h>
+#include <openssl/md4.h>
 #include <openssl/hmac.h>
 #include <gnutls/x509.h>
 
 #include "libsstp.h"
 #include "sstpclient.h"
+
 
 
 void generate_guid(char data[])
@@ -697,11 +699,7 @@ int crypto_set_binding(void* data)
   if (crypto_set_certhash() < 0)
     return -1;
 
-  /* compute compound mac according to spec */
-  /* if (crypto_set_cmac() < 0) */
-    /* return -1; */
-  /* is done after ppp negociation */
-
+  
   /* change client state */
   change_status(CLIENT_CONNECT_ACK_RECEIVED);
 
@@ -762,10 +760,6 @@ int crypto_set_certhash()
   return 0;
 }
 
-
-#include <openssl/md4.h>
-#define NT_PASSWORD_HASH(src, dst) ((MD4(src, strlen(src), dst)))
-#define HASH_NT_PASSWORD_HASH(src, dst) ((MD4(src, MD4_DIGEST_LENGTH, dst)))
 
 int crypto_set_cmac()
 { 

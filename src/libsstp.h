@@ -7,6 +7,9 @@
 #define UNUSED
 #endif
 
+#define NT_PASSWORD_HASH(src, dst) ((MD4(src, strlen(src), dst)))
+#define HASH_NT_PASSWORD_HASH(src, dst) ((MD4(src, MD4_DIGEST_LENGTH, dst)))
+
 /* System properties */
 #define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
    
