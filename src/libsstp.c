@@ -744,9 +744,7 @@ int crypto_set_certhash()
   HASH(buffer, buffer_len, dst);
   
   /* move hash to client context variable */
-  /* 86695fbe4cf54df5eae881b65148357559e9d28a7b7c1845da91778150bfb991 */
-  for(i=0; i<8; i++)
-    ctx->certhash[i] = *(uint32_t*)(dst+(i*4));
+  for(i=0; i<8; i++) ctx->certhash[i] = *(uint32_t*)(dst+(i*4));
 
 
   if (cfg->verbose)
@@ -762,55 +760,59 @@ int crypto_set_certhash()
 
 int crypto_set_cmac()
 { 
-  unsigned char hlak[32];
-  unsigned int i=0;
-  uint8_t *cmac;
-  uint8_t seed[SSTP_CMAC_SEED_LEN];
+  unsigned int i = 0;
 
-  
-  /* crypto time (http://tools.ietf.org/search/rfc2759#section-8.3) */
-  unsigned char PasswordHash[MD4_DIGEST_LENGTH];
-  unsigned char PasswordHashHash[MD4_DIGEST_LENGTH];
-  unsigned char NT_Response[24];
-  unsigned char Master_Key[16];
-  unsigned char Master_Send_Key[16];
-  unsigned char Master_Receive_Key[16];
-  
+  uint8_t hlak[32];
+  uint8_t *cmac;
+  uint8_t seed[SSTP_CMAC_SEED_LEN] =
+    {
+      /* seed = "SSTP inner method derived CMK" */
+      0x53, 0x53, 0x54, 0x50, 0x20, 0x69, 0x6e, 0x6e,
+      0x65, 0x72, 0x20, 0x6d, 0x65, 0x74, 0x68, 0x6f,
+      0x64, 0x20, 0x64, 0x65, 0x72, 0x69, 0x76, 0x65,
+      0x64, 0x20, 0x43, 0x4d, 0x4b
+    }; 
+
+  uint8_t PasswordHash[MD4_DIGEST_LENGTH];
+  uint8_t PasswordHashHash[MD4_DIGEST_LENGTH];
+  uint8_t NT_Response[24];
+  uint8_t Master_Key[16];
+  uint8_t Master_Send_Key[16];
+  uint8_t Master_Receive_Key[16];
+
+  memset(hlak, 0, 32);
   memset(PasswordHash, 0, MD4_DIGEST_LENGTH);
   memset(PasswordHashHash, 0, MD4_DIGEST_LENGTH);
   memset(NT_Response, 0, 24);
 
+  /* crypto fun time (http://tools.ietf.org/search/rfc2759#section-8.3) */
   /* setting HLAK */
-  NtPasswordHash(cfg->password, strlen(cfg->password), PasswordHash);
-  HashNtPasswordHash(PasswordHash, PasswordHashHash);
-  memcpy(NT_Response, chap_ctx->response_nt_response, 24);
-  GetMasterKey(PasswordHashHash, NT_Response, Master_Key);
-  GetAsymmetricStartKey(Master_Send_Key, Master_Key, 16, 1, 1);
-  GetAsymmetricStartKey(Master_Receive_Key, Master_Key,  16, 0, 1);
+  NtPasswordHash( PasswordHash, cfg->password, strlen(cfg->password) );
+  HashNtPasswordHash( PasswordHashHash, PasswordHash );
+  memcpy( NT_Response, chap_ctx->response_nt_response, 24 );
+  GetMasterKey( Master_Key, PasswordHashHash, NT_Response );
+  GetAsymmetricStartKey( Master_Send_Key, Master_Key, 16, TRUE, TRUE );
+  GetAsymmetricStartKey( Master_Receive_Key, Master_Key,  16, FALSE, TRUE );
+  /* For MS-CHAPv2, SSTP Client HLAK = MasterSendKey | MasterReceiveKey */
+  memcpy(hlak, Master_Send_Key, 16*sizeof(uint8_t));
+  memcpy(hlak + 16, Master_Receive_Key, 16*sizeof(uint8_t));
 
-  memcpy(hlak, Master_Send_Key, 16*sizeof(char));
-  memcpy(hlak+16, Master_Receive_Key, 16*sizeof(char));
 
+  /* computing CMAC */
+  switch (ctx->hash_algorithm)
+    {
+    case CERT_HASH_PROTOCOL_SHA1:
+      cmac = PRF(hlak, seed, SHA1_MAC_LEN);
+      break;
+
+    case CERT_HASH_PROTOCOL_SHA256:
+      cmac = PRF(hlak, seed, SHA256_MAC_LEN);
+      break;
+    }
+
+  if (cmac == NULL) return -1;
   
-  /* setting Seed */
-  memcpy(seed, SSTP_CMAC_SEED_STR, SSTP_CMAC_SEED_LEN);
-
-
-  /* computing cmac */
-  switch (ctx->hash_algorithm) {
-  case CERT_HASH_PROTOCOL_SHA1:
-    cmac = PRF(hlak, seed, SHA1_MAC_LEN);
-    break;
-
-  case CERT_HASH_PROTOCOL_SHA256:
-    cmac = PRF(hlak, seed, SHA256_MAC_LEN);
-    break;
-  }
-
-  for(i=0;i<8;i++)
-    ctx->cmac[i] = *((uint32_t*)(cmac+(i*4)));
-
-  /* memcpy(ctx->cmac, cmac, 32); */
+  for(i=0;i<8;i++) ctx->cmac[i] = *((uint32_t*)(cmac+(i*4)));
   
   free(cmac);
 
@@ -903,9 +905,9 @@ int attribute_status_info(void* data, uint16_t attr_len)
  * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
  * Alain Thivillon et Herve Schauer Consultants
  *
- * \brief fork and execute pppd daemon
- * \retval child pid if process is the father
- * \retval none otherwise (execute pppd)
+ * @desc fork and execute pppd daemon
+ * @return child pid if process is the father
+ * @return none otherwise (execute pppd)
  **/
 int sstp_fork() 
 {
@@ -996,8 +998,7 @@ int sstp_fork()
 }
 
 
-
-uint8_t* PRF(char* key, char* seed, uint16_t len)
+uint8_t* PRF(unsigned char* key, unsigned char* seed, uint16_t len)
 {
   uint8_t *temp_data = NULL;
   size_t temp_len = 0;
@@ -1011,29 +1012,17 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
     HASH = &EVP_sha1;
   else
     HASH = &EVP_sha256; 
-
   
   mac = (uint8_t*) xmalloc(len);
 
   temp_len = SSTP_CMAC_SEED_LEN + sizeof(uint16_t) + sizeof(uint8_t);
   temp_data = (uint8_t*) xmalloc(temp_len);
 
-  /*
-   * CMK = First 32 octets of PRF+ (HLAK, CMK Seed, 32);
-   * PRF = PRF (Key, Seed, Len) = T1 | T2 | T3 | T4 | ... ou Len est un uint16_t
-   * T1 = HMAC-SHA256 (K, S | LEN | 0x01)
-   * T2 = HMAC-SHA256 (K, T1 | S | LEN | 0x02)
-   * ...
-   */
-  /* memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);  */
-  /* memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t)); */
-  /* memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &i, sizeof(uint8_t)); */
+  memcpy(temp_data, seed, SSTP_CMAC_SEED_LEN);
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN, &len, sizeof(uint16_t));
+  memcpy(temp_data+SSTP_CMAC_SEED_LEN+sizeof(uint16_t), &prefix, sizeof(uint8_t));
 
-  /* nagawika */
-  memcpy(temp_data, &prefix, sizeof(uint8_t));
-  memcpy(temp_data+sizeof(uint8_t), &len, sizeof(uint16_t));
-  memcpy(temp_data+sizeof(uint8_t)+sizeof(uint16_t), seed, SSTP_CMAC_SEED_LEN);
-
+  /* PRF = HMAC-256-256 (Key, Seed | Len | 0x01) */
   HMAC(HASH(), key, 32, temp_data, temp_len, (uint8_t*)mac, &mdlen);
 
   free(temp_data);
@@ -1042,6 +1031,7 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
     {
       xlog(LOG_INFO, "%s function didn't return valid data!\n",
 	   crypto_req_attrs_str[ctx->hash_algorithm]);
+      free(mac);
       return NULL;
     }
   
@@ -1049,7 +1039,7 @@ uint8_t* PRF(char* key, char* seed, uint16_t len)
 }
 
 
-void NtPasswordHash(const uint8_t *password, size_t password_len, uint8_t *password_hash)
+void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len)
 {
   uint8_t buf[512];
   size_t i;
@@ -1063,24 +1053,24 @@ void NtPasswordHash(const uint8_t *password, size_t password_len, uint8_t *passw
   memset(buf, 0, 512);
   
   /* Convert password into unicode */
-  for (i = 0; i < password_len; i++) 
-    buf[2 * i] = password[i];
+  for ( i=0; i<password_len; i++ )
+    buf[i*2] = password[i];
 
   MD4(buf, password_len * 2, password_hash);
 }
 
-void HashNtPasswordHash(const uint8_t *password_hash, uint8_t *password_hash_hash)
+void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash)
 {
-  MD4(password_hash, MD4_DIGEST_LENGTH, password_hash_hash);
+  MD4((unsigned char*)password_hash, MD4_DIGEST_LENGTH, password_hash_hash);
 }
 
 /*
  * From http://tools.ietf.org/search/rfc3079
  */
-void GetMasterKey(void* PasswordHashHash, void* NTResponse, void* MasterKey)
+void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse)
 {
   SHA_CTX Context;
-  unsigned char Digest[20];
+  uint8_t Digest[20];
   
   /*
    * "Magic" constants used in key derivations
@@ -1108,8 +1098,8 @@ void GetMasterKey(void* PasswordHashHash, void* NTResponse, void* MasterKey)
 void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey, 
 			   uint8_t KeyLength, uint8_t IsSend, uint8_t IsServer)
 {
-  unsigned char Digest[20];
-  unsigned char *Magic;
+  uint8_t Digest[20];
+  uint8_t *Magic;
   SHA_CTX Context;
 
   /*
@@ -1164,8 +1154,7 @@ void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
   memset(Digest, 0, 20);
   
   if (IsSend)
-    Magic = (IsServer? Magic3 : Magic2);
-      
+    Magic = (IsServer? Magic3 : Magic2);     
   else
     Magic = (IsServer? Magic2 : Magic3);
 

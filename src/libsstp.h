@@ -7,11 +7,11 @@
 #define UNUSED
 #endif
 
-#define NT_PASSWORD_HASH(src, dst) ((MD4(src, strlen(src), dst)))
-#define HASH_NT_PASSWORD_HASH(src, dst) ((MD4(src, MD4_DIGEST_LENGTH, dst)))
+#define TRUE 1
+#define FALSE 0
 
 /* System properties */
-#define __UNSIGNED_LONG_LONG_MAX__ (~0LLU)
+#define __UNSIGNED_LONG_LONG_MAX__ (~0ULL)
    
 /* SSTP Properties */
 #define SSTP_HTTPS_RESOURCE "/sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/"
@@ -21,8 +21,6 @@
 #define SSTP_NEGOCIATION_TIMER 60
 #define SSTP_PING_TIMER 30
 #define SSTP_MAX_BUFFER_SIZE 1024
-
-#define SSTP_CMAC_SEED_STR  "SSTP inner method derived CMK"
 #define SSTP_CMAC_SEED_LEN  29
 
 #define SHA1_MAC_LEN 20
@@ -264,10 +262,9 @@ int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
 
 /* exp */
-uint8_t* PRF(char* key, char* seed, uint16_t len);
-
-void NtPasswordHash(const uint8_t *password, size_t password_len, uint8_t *password_hash);
-void HashNtPasswordHash(const uint8_t *password_hash, uint8_t *password_hash_hash);
-void GetMasterKey(void* PasswordHashHash, void* NTResponse, void* MasterKey );
+uint8_t* PRF(unsigned char* key, unsigned char* seed, uint16_t len);
+void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len);
+void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash);
+void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse);
 void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey, 
 			   uint8_t KeyLength, uint8_t IsSend, uint8_t IsServer);
