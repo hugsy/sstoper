@@ -227,7 +227,7 @@ typedef struct __sstp_context
   uint32_t cmac[8];
 } sstp_context_t;
 
-static sstp_context_t* ctx;
+static UNUSED sstp_context_t* ctx;
 
 typedef struct __chap_context 
 {
@@ -237,7 +237,7 @@ typedef struct __chap_context
   unsigned char response_flags[1];
 } chap_context_t;
 
-static chap_context_t* chap_ctx;
+static UNUSED chap_context_t* chap_ctx;
 
 
 /* functions declarations  */
@@ -263,7 +263,7 @@ int sstp_fork();
 
 /* exp */
 uint8_t* PRF(unsigned char* key, unsigned char* seed, uint16_t len);
-void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len);
+void NtPasswordHash(uint8_t *password_hash, const char *password, size_t password_len);
 void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash);
 void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse);
 void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey, 

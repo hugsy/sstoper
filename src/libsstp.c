@@ -104,8 +104,8 @@ int https_session_negociation()
   
   rbytes = snprintf(buf, read_size,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
-		    "Host: whatever.here.%s\r\n" // <-- note: le hostname pas valide cote server 
-		    "SSTPCORRELATIONID: {nawak}%s\r\n" // <-- note: on peut mettre nawak aussi
+		    "Host: %s\r\n" // <-- note: le hostname pas valide cote server 
+		    "SSTPCORRELATIONID: %s\r\n" // <-- note: on peut mettre nawak aussi
 		    "Content-Length: %llu\r\n"
 		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth: True\r\n"
 		    "\r\n",
@@ -565,10 +565,15 @@ void send_sstp_data_packet(void* data, size_t len)
       /* if msg is PPP-CHAP response */	
       if (chap_handshake_code == 0x02 )
 	{
-	  memcpy((void*)&chap_ctx->response_challenge, data + 7, 49);
+	  unsigned int i;
+	  for (i=0; i<48; i+=4)
+	    {
+	      uint32_t foo = ntohl(*(uint32_t*)(data+7+i));	      
+	      memcpy((void*)&chap_ctx->response_challenge + i, &foo, 4) ; 
+	    }
+	  
 	}
     }
-  
 
   send_sstp_packet(SSTP_DATA_PACKET, data, len);
 }
@@ -786,6 +791,7 @@ int crypto_set_cmac()
   memset(NT_Response, 0, 24);
 
   /* crypto fun time (http://tools.ietf.org/search/rfc2759#section-8.3) */
+  
   /* setting HLAK */
   NtPasswordHash( PasswordHash, cfg->password, strlen(cfg->password) );
   HashNtPasswordHash( PasswordHashHash, PasswordHash );
@@ -793,11 +799,11 @@ int crypto_set_cmac()
   GetMasterKey( Master_Key, PasswordHashHash, NT_Response );
   GetAsymmetricStartKey( Master_Send_Key, Master_Key, 16, TRUE, TRUE );
   GetAsymmetricStartKey( Master_Receive_Key, Master_Key,  16, FALSE, TRUE );
+  
   /* For MS-CHAPv2, SSTP Client HLAK = MasterSendKey | MasterReceiveKey */
   memcpy(hlak, Master_Send_Key, 16*sizeof(uint8_t));
   memcpy(hlak + 16, Master_Receive_Key, 16*sizeof(uint8_t));
-
-
+  
   /* computing CMAC */
   switch (ctx->hash_algorithm)
     {
@@ -812,13 +818,14 @@ int crypto_set_cmac()
 
   if (cmac == NULL) return -1;
   
-  for(i=0;i<8;i++) ctx->cmac[i] = *((uint32_t*)(cmac+(i*4)));
+  for(i=0;i<8;i++) ctx->cmac[i] = (*((uint32_t*)(cmac+(i*4))));
+  /* memcpy(ctx->cmac, cmac, 32); */
   
   free(cmac);
 
   /* debug */
-  /* if (cfg->verbose) */
-    /* { */
+  if (cfg->verbose)
+    {
       
       xlog(LOG_INFO, "H(Pwd)\t 0x");
       for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
@@ -855,7 +862,7 @@ int crypto_set_cmac()
       xlog(LOG_INFO, "CMac\t 0x");
       for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ctx->cmac[i]);
       xlog(LOG_INFO, "\n");
-    /* } */
+    }
   
   return 0;
 }
@@ -907,7 +914,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
  *
  * @desc fork and execute pppd daemon
  * @return child pid if process is the father
- * @return none otherwise (execute pppd)
+ * @return none otherwise (execv pppd)
  **/
 int sstp_fork() 
 {
@@ -934,6 +941,8 @@ int sstp_fork()
     {
       pppd_args[i++] = "logfile";   pppd_args[i++] = cfg->logfile;
       pppd_args[i++] = "debug";
+      pppd_args[i++] = "kdebug";
+      pppd_args[i++] = "7";
     }
 
   if (cfg->domain != NULL)
@@ -942,6 +951,15 @@ int sstp_fork()
       pppd_args[i++] = cfg->domain;
     }
 
+  /* exp args */
+  pppd_args[i++] = "noipv6";
+  pppd_args[i++] = "require-mppe-128";
+  /* pppd_args[i++] = "nomppe"; */
+  pppd_args[i++] = "refuse-pap";
+  pppd_args[i++] = "refuse-mschap";
+  /* pppd_args[i++] = "refuse-mschap-v2"; */
+  pppd_args[i++] = "refuse-chap";
+  
   pppd_args[i++] = NULL;
 
   memset(&pty, 0, sizeof(struct termios));
@@ -1039,11 +1057,13 @@ uint8_t* PRF(unsigned char* key, unsigned char* seed, uint16_t len)
 }
 
 
-void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len)
+void NtPasswordHash(uint8_t *password_hash, const char *password, size_t password_len)
 {
   uint8_t buf[512];
   size_t i;
-    
+
+  MD4_CTX c;
+  
   if (password_len > 256)
     {
       password_hash = NULL;
@@ -1056,12 +1076,17 @@ void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t pass
   for ( i=0; i<password_len; i++ )
     buf[i*2] = password[i];
 
-  MD4(buf, password_len * 2, password_hash);
+  MD4_Init(&c);
+  MD4_Update(&c, buf, password_len * 2);
+  MD4_Final(password_hash, &c);
 }
 
 void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash)
 {
-  MD4((unsigned char*)password_hash, MD4_DIGEST_LENGTH, password_hash_hash);
+  MD4_CTX c;
+  MD4_Init(&c);
+  MD4_Update(&c, password_hash, MD4_DIGEST_LENGTH);
+  MD4_Final(password_hash_hash, &c);
 }
 
 /*
@@ -1069,7 +1094,7 @@ void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_has
  */
 void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse)
 {
-  SHA_CTX Context;
+  SHA_CTX c;
   uint8_t Digest[20];
   
   /*
@@ -1085,11 +1110,11 @@ void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse)
 
   memset(Digest, 0, sizeof(Digest));
 
-  SHA1_Init(&Context);
-  SHA1_Update(&Context, PasswordHashHash, 16);
-  SHA1_Update(&Context, NTResponse, 24);
-  SHA1_Update(&Context, Magic1, 27);
-  SHA1_Final(Digest, &Context);
+  SHA1_Init(&c);
+  SHA1_Update(&c, PasswordHashHash, 16);
+  SHA1_Update(&c, NTResponse, 24);
+  SHA1_Update(&c, Magic1, 27);
+  SHA1_Final(Digest, &c);
   
   memcpy(MasterKey, Digest, 16);
 }
@@ -1100,7 +1125,7 @@ void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
 {
   uint8_t Digest[20];
   uint8_t *Magic;
-  SHA_CTX Context;
+  SHA_CTX c;
 
   /*
    * Pads used in key derivation
@@ -1124,7 +1149,7 @@ void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
   /*
    * "Magic" constants used in key derivations
    */
-  
+ 
   static unsigned char Magic2[84] =
     {
       0x4f, 0x6e, 0x20, 0x74, 0x68, 0x65, 0x20, 0x63, 0x6c, 0x69,
@@ -1150,21 +1175,21 @@ void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
       0x20, 0x74, 0x68, 0x65, 0x20, 0x73, 0x65, 0x6e, 0x64, 0x20,
       0x6b, 0x65, 0x79, 0x2e
     };
- 
+  
   memset(Digest, 0, 20);
   
   if (IsSend)
-    Magic = (IsServer? Magic3 : Magic2);     
+    Magic = (IsServer ? Magic3 : Magic2);     
   else
-    Magic = (IsServer? Magic2 : Magic3);
+    Magic = (IsServer ? Magic2 : Magic3);
 
 
-  SHA1_Init(&Context);
-  SHA1_Update(&Context, MasterKey, 16);
-  SHA1_Update(&Context, SHSpad1, 40);
-  SHA1_Update(&Context, Magic, 84);
-  SHA1_Update(&Context, SHSpad2, 40);
-  SHA1_Final(Digest, &Context);
+  SHA1_Init(&c);
+  SHA1_Update(&c, MasterKey, 16);
+  SHA1_Update(&c, SHSpad1, 40);
+  SHA1_Update(&c, Magic, 84);
+  SHA1_Update(&c, SHSpad2, 40);
+  SHA1_Final(Digest, &c);
   
   memcpy(MasterSessionKey, Digest, KeyLength);
 }

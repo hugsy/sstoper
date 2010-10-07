@@ -20,6 +20,12 @@
 #include "libsstp.h"
 
 
+static sock_t init_tcp(char*, char*);
+static int init_tls_session();
+static int check_tls_session();
+static void end_tls_session(int);
+
+
 void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;

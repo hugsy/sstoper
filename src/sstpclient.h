@@ -52,8 +52,4 @@ extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__rest
 void xlog(int type, const char* fmt, ...); 
 void* xmalloc(size_t size);
 
-static sock_t init_tcp(char* hostname, char* port);
-static int init_tls_session();
-static int check_tls_session();
-static void end_tls_session(int reason);
 
