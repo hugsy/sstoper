@@ -1,3 +1,9 @@
+#ifdef __GNUC__
+#define UNUSED __attribute__ ((unused))
+#else
+#define UNUSED
+#endif
+
 /* structure definition */
 #ifdef __x86_64
 typedef long sock_t;
@@ -9,8 +15,8 @@ typedef int sock_t;
     fprintf(stderr, "-----------------------\n"	\
 	    "Assertion failed.\n"		\
 	    "File: %s\nLine: %d\n"		\
-	    "Assertion: %s\n\n"			\
-	    ,__FILE__,__LINE__,#x);		\
+	    "Assertion: %s\n\n",		\
+	    __FILE__, __LINE__, #x);		\
     exit(1);					\
   }
 
