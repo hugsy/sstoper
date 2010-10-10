@@ -114,7 +114,8 @@ int https_session_negociation()
 		    guid,
 		    __UNSIGNED_LONG_LONG_MAX__);
 
-  if (cfg->verbose) xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
+  if (cfg->verbose > 2)
+    xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
 
   sstp_send(buf, rbytes);
   
@@ -124,7 +125,9 @@ int https_session_negociation()
   if (rbytes > 0)
     {
       xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
-      if (cfg->verbose) xlog(LOG_DEBUG , "Received: %s\n", buf);
+
+      if (cfg->verbose > 2)
+	xlog(LOG_DEBUG , "Received: %s\n", buf);
     }
   else if (rbytes == 0)
     {
@@ -144,8 +147,10 @@ int https_session_negociation()
   return 0;
 }
 
-
-void initialize_sstp()
+/**
+ * Emits negociation request
+ */
+void sstp_init()
 {
   uint16_t attribute_data;
   void* attribute;
@@ -170,6 +175,14 @@ void initialize_sstp()
 }
 
 
+/**
+ * The main loop will be called right after the end of HTTPS negociation and
+ * - allocates SSTP client context regions
+ * - start an SSTP negociation
+ * - handle receive packets
+ * - send packets
+ * When connection is over (ie client status is disconnected), free those regions
+ */
 void sstp_loop()
 {
   size_t read_max_size;
@@ -190,9 +203,8 @@ void sstp_loop()
   /* initialize chap context */
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
 
-  
   /* start sstp negociation */
-  initialize_sstp();
+  sstp_init();
 
 
   while(ctx->state != CLIENT_CALL_DISCONNECTED)
@@ -341,7 +353,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 				     5-ctx->retry, 5);
 	      ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
 	      ctx->retry--;
-	      initialize_sstp();
+	      sstp_init();
 	    }
 
 	  break;
@@ -387,9 +399,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       void* data_ptr;
       data_ptr = rbuffer + sizeof(sstp_header_t);
 
-      /*
-       * http://tools.ietf.org/search/rfc2759#section-4
-       */
+      /* http:tools.ietf.org/search/rfc2759#section-4 */
       
       if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 )
 	{
@@ -480,8 +490,8 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
       /* parsing attribute header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t\t--> attribute_id:%s (%#.2x)\n",attr_types_str[attribute_id], attribute_id);
-	  xlog(LOG_INFO, "\t\t--> len: %d bytes\n", attribute_length);
+	  xlog(LOG_INFO, "\t\t--> attr_id\t%s (%#.2x)\n",attr_types_str[attribute_id], attribute_id);
+	  xlog(LOG_INFO, "\t\t--> len\t\t%d bytes\n", attribute_length);
 	}
 
       switch (attribute_id)
@@ -496,7 +506,7 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 	  retcode = crypto_set_binding(attribute_data);
 	  break;
 
-	  /* cas a ne pas traiter */
+	  /* cas a ne pas traiter pour un client */
 	case SSTP_ATTRIB_CRYPTO_BINDING:
 	case SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID:
 	default:
@@ -560,17 +570,11 @@ void send_sstp_data_packet(void* data, size_t len)
   if ( ntohs(*((uint16_t*)data)) == 0xc223 )
     {
       uint8_t chap_handshake_code = *(uint8_t*)(data + 2);
-
+      
       /* if msg is PPP-CHAP response */	
       if (chap_handshake_code == 0x02 )
 	{
-	  unsigned int i;
-	  for (i=0; i<48; i+=4)
-	    {
-	      uint32_t foo = ntohl(*(uint32_t*)(data+7+i));	      
-	      memcpy((void*)&chap_ctx->response_challenge + i, &foo, 4) ; 
-	    }
-	  
+	  memcpy(chap_ctx, data+7, 49);
 	}
     }
 
@@ -648,13 +652,8 @@ void* create_attribute(uint8_t attribute_id, void* data, size_t data_length)
 int crypto_set_binding(void* data)
 {
   sstp_attribute_crypto_bind_req_t* req;
-  uint8_t hash;
-  int i;
-
-  /* disable negociation timer */
-  alarm(0);
-  
-  /* check state */
+ 
+  /* Validating client state */
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
     {
       xlog(LOG_ERROR, "Incorrect message for this state\n");
@@ -666,43 +665,35 @@ int crypto_set_binding(void* data)
       
       return -1;
     }
-  
-  /* setting crypto properties */
-  req = (sstp_attribute_crypto_bind_req_t*) data;
-  hash = req->hash_bitmask;
 
-  switch(hash) 
+  /* Disable negociation timer */
+  alarm(0);
+  
+  /* Setting crypto properties */
+  req = (sstp_attribute_crypto_bind_req_t*) data;
+
+  /* Setting hash algorithm type (SHA1 or SHA256) */
+  switch(req->hash_bitmask) 
     {
-    case CERT_HASH_PROTOCOL_SHA1:
     case CERT_HASH_PROTOCOL_SHA256:
+      ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
       break;
-      
+
+    case CERT_HASH_PROTOCOL_SHA1:
+      ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
+      break;
+           
     default:
-      xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", hash);
+      xlog(LOG_ERROR, "Unknown hash algorithm %#x\n", req->hash_bitmask);
       return -1;
     }
 
-  /* choose strongest algorithm */
-  if (hash == CERT_HASH_PROTOCOL_SHA256)
-    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA256;
-  else
-    ctx->hash_algorithm = CERT_HASH_PROTOCOL_SHA1;
-
-  memcpy(ctx->nonce, req->nonce, sizeof(uint32_t)*8);
+  memcpy(ctx->nonce, req->nonce, sizeof(uint32_t) * 8);
   
-  if (cfg->verbose)
-    {
-      xlog(LOG_INFO, "\t\t--> hash algo: %s (%#.2x)\n", crypto_req_attrs_str[ctx->hash_algorithm],
-	   ctx->hash_algorithm);
-      xlog(LOG_INFO, "\t\t--> nonce: 0x");
-      for (i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->nonce[i]);
-      xlog(LOG_INFO, "\n");
-    }
-
   /* compute ca file hash with chosen algorithm */
   if (crypto_set_certhash() < 0)
     return -1;
-
+  
 
   /* change client state */
   set_client_status(CLIENT_CONNECT_ACK_RECEIVED);
@@ -749,15 +740,7 @@ int crypto_set_certhash()
   
   /* move hash to client context variable */
   for(i=0; i<8; i++) ctx->certhash[i] = *(uint32_t*)(dst+(i*4));
-
-
-  if (cfg->verbose)
-    {
-      xlog(LOG_INFO, "\t\t--> CA hash: 0x");
-      for(i=0; i<8; i++) xlog(LOG_INFO, "%x", ctx->certhash[i]);
-      xlog(LOG_INFO, "\n");
-    }
-  
+ 
   return 0;
 }
 
@@ -765,7 +748,9 @@ int crypto_set_certhash()
 int crypto_set_cmac()
 { 
   unsigned int i = 0;
-
+  unsigned char buffer[112];
+  uint16_t hash_len;
+  
   uint8_t hlak[32];
   uint8_t *cmac, *cmk;
   uint8_t seed[32];
@@ -782,7 +767,8 @@ int crypto_set_cmac()
   memset(PasswordHash, 0, MD4_DIGEST_LENGTH);
   memset(PasswordHashHash, 0, MD4_DIGEST_LENGTH);
   memset(NT_Response, 0, 24);
-
+  memset(buffer, 0, 112);
+  
   /* crypto fun time (http://tools.ietf.org/search/rfc2759#section-8.3) */
   
   /* setting HLAK */
@@ -793,126 +779,117 @@ int crypto_set_cmac()
   GetAsymmetricStartKey( Master_Send_Key, Master_Key, 16, TRUE, TRUE );
   GetAsymmetricStartKey( Master_Receive_Key, Master_Key,  16, FALSE, TRUE );
   
-  /* For MS-CHAPv2, SSTP Client HLAK = MasterSendKey | MasterReceiveKey */
-  memcpy(hlak, Master_Send_Key, 16*sizeof(uint8_t));
-  memcpy(hlak + 16, Master_Receive_Key, 16*sizeof(uint8_t));
-<<<<<<< HEAD
-  
-  /* computing CMAC */
-=======
-
+  /*
+   * Specification bug: 
+   * "For MS-CHAPv2, SSTP Client HLAK = MasterSendKey | MasterReceiveKey"
+   * whereas implementation SHOULD be done like
+   * For MS-CHAPv2, SSTP Client HLAK = MasterReceiveKey | MasterSendKey
+   */
+  memcpy(hlak, Master_Receive_Key, 16*sizeof(uint8_t));
+  memcpy(hlak + 16, Master_Send_Key, 16*sizeof(uint8_t));
 
   /*
    * Computing CMAC:
    * CMac computation occurs in 2 times:
-   * T1- CMK computation : CMK = HMAC-SHA(key= hlak, msg= SEED|LEN|0x01)
-   * T2- CMac computation: CMac= HMAC-SHA(key= CMK, msg= SSTP_CALL_CONNECTED_MSG_ZEROED)
+   * T1 - CMK computation : CMK = HMAC-SHA(key= hlak, msg= SEED|LEN|0x01)
+   * T2 - CMac computation: CMac= HMAC-SHA(key= CMK, msg= SSTP_CALL_CONNECTED_MSG_ZEROED)
    *
    * Where SSTP_CALL_CONNECTED_MSG_ZEROED is SSTP_CALL_CONNECTED_MSG with CMAC field
    * filled with 0 (zero)
    */
   ptr = seed;
-  memcpy(ptr, SSTP_SEED_PREFIX, SSTP_CMAC_SEED_PREFIX_LEN);
-  ptr += SSTP_CMAC_SEED_PREFIX_LEN;
+  memcpy(ptr, SSTP_SEED_PREFIX, strlen(SSTP_SEED_PREFIX));
+  ptr += strlen(SSTP_SEED_PREFIX);
   
   /* T1 */
->>>>>>> c64d315b1911c09d96f72b26b2046928c616267c
-  switch (ctx->hash_algorithm)
-    {
-    case CERT_HASH_PROTOCOL_SHA1:
-      *ptr = htons(SHA1_HASH_LEN);
-      ptr += sizeof(SHA1_HASH_LEN);
-      *ptr = 1;
-      ptr ++;
-
-      cmk = sstp_hmac(hlak, seed, SHA1_HASH_LEN);
-      break;
-
-    case CERT_HASH_PROTOCOL_SHA256:
-      *ptr = htons(SHA256_HASH_LEN);
-      ptr += sizeof(SHA256_HASH_LEN);
-      *ptr = 1;
-
-      cmk = sstp_hmac(hlak, seed, SHA256_HASH_LEN);
-      break;
-    }
-
-  if (cmk == NULL) return -1;
-  for(i=0; i<8; i++) ctx->cmk[i] = *((uint32_t*)(cmk+(i*4)));
-
-  free(cmk);
+  /*
+   * To generate the Compound MAC Key (CMK), implementations MUST use the HLAK, MUST use the
+   * PRF+ seed value as the input to a PRF+ operation, and MUST generate 32 bytes.
+   */
   
-<<<<<<< HEAD
-  for(i=0;i<8;i++) ctx->cmac[i] = (*((uint32_t*)(cmac+(i*4))));
-  /* memcpy(ctx->cmac, cmac, 32); */
-=======
+  hash_len = (ctx->hash_algorithm==CERT_HASH_PROTOCOL_SHA1) ? SHA1_HASH_LEN : SHA256_HASH_LEN;
+  memcpy(ptr, &hash_len, sizeof(uint16_t)); ptr += sizeof(uint16_t);
+  *ptr = 0x01; ptr ++;
+
+  if ( (cmk = sstp_hmac(hlak, seed, 32)) == NULL) return -1;
+  
+  
   /* T2 */
   /*
    * "[...] the Compound MAC MUST be constructed from the entire 112 bytes of the Call Connected
    * message(section 2.2.11) with the Compound MAC field and Padding field zeroed out."
    */
-
-  uint8_t buffer[112];
-  ptr = buffer;
   
-  /* bad ass quick'n dirty buffer filling */
-  memcpy(ptr, "\x10\x01\x00\x70\x00\x04\x00\x01\x00\x03\x00\x68\x00\x00\x00\x02", 16);
-  ptr+= 16;
-
+  /* bad ass quick'n dirty buffer filling, to improve */
+  ptr = buffer;
+  memcpy(ptr, "\x10\x01\x00\x70\x00\x04\x00\x01\x00\x03\x00\x68\x00\x00\x00\x02", 16); ptr+= 16;
   memcpy(ptr, ctx->nonce, 32); ptr += 32;
   memcpy(ptr, ctx->certhash, 32); ptr += 32;
-  for (i=0; i<32; i++) *ptr = 0;
+  xlog(LOG_INFO,"buf: "); for (i=0; i<112; i++) xlog(LOG_INFO, "%.2x", buffer[i]); xlog(LOG_INFO,"\n");
+  if ( !(cmac = sstp_hmac(cmk, buffer, 112)) ) return -1;
   
-  cmac = sstp_hmac (cmk, buffer, 112);
+  memcpy(ctx->cmk, cmk, 32);
+  memcpy(ctx->cmac, cmac, 32);
 
-  if (cmac == NULL) return -1; 
-  for(i=0; i<8; i++) ctx->cmac[i] = *((uint32_t*)(cmac+(i*4)));
->>>>>>> c64d315b1911c09d96f72b26b2046928c616267c
-  
+  free(cmk);
   free(cmac);
 
-  /* debug */
+  
+  /* Debug */
   if (cfg->verbose)
     {
+      xlog(LOG_INFO, "\t\t--> hash algo\t%s (%#.2x)\n",
+	   crypto_req_attrs_str[ctx->hash_algorithm], ctx->hash_algorithm);
       
-      xlog(LOG_INFO, "H(Pwd)\t 0x");
-      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
-      xlog(LOG_INFO, "\n");
-      
-      xlog(LOG_INFO, "H(H)\t 0x");
-      for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHashHash[i]);
-      xlog(LOG_INFO, "\n");
-      
-      xlog(LOG_INFO, "NT_Rsp\t 0x");
-      for (i=0; i<24; i++) xlog(LOG_INFO, "%.2x", NT_Response[i]);
+      xlog(LOG_INFO, "\t\t--> nonce\t0x");
+      for (i=0; i<8; i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->nonce[i]));
       xlog(LOG_INFO, "\n");
 
-      xlog(LOG_INFO, "MKey\t 0x");
-      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Key[i]);
+      xlog(LOG_INFO, "\t\t--> CA hash\t0x");
+      for(i=0; i<8; i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->certhash[i]));
       xlog(LOG_INFO, "\n");
 
-      xlog(LOG_INFO, "MSK\t 0x");
-      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Send_Key[i]);
-      xlog(LOG_INFO, "\n");
+      if (cfg->verbose > 2)
+	{
+	  xlog(LOG_INFO, "\t\t--> Seed\t0x");
+	  for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", seed[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> H(Pwd)\t0x");
+	  for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> H(H)\t0x");
+	  for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHashHash[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> NT_Rsp\t0x");
+	  for (i=0; i<24; i++) xlog(LOG_INFO, "%.2x", NT_Response[i]);
+	  xlog(LOG_INFO, "\n");
 
-      xlog(LOG_INFO, "MRK\t 0x");
-      for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Receive_Key[i]);
-      xlog(LOG_INFO, "\n");
-
-      xlog(LOG_INFO, "HLAK\t 0x");
-      for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", hlak[i]);
-      xlog(LOG_INFO, "\n");
-      
-      xlog(LOG_INFO, "Seed\t 0x");
-      for (i=0; i<SSTP_CMAC_SEED_PREFIX_LEN; i++) xlog(LOG_INFO, "%.2x", seed[i]);
-      xlog(LOG_INFO, "\n");
-
-      xlog(LOG_INFO, "CMK\t 0x");
-      for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ctx->cmk[i]);
-      xlog(LOG_INFO, "\n");
-      
-      xlog(LOG_INFO, "CMac\t 0x");
-      for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ctx->cmac[i]);
+	  xlog(LOG_INFO, "\t\t--> MKey\t0x");
+	  for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Key[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> S_Key\t0x");
+	  for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Send_Key[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> R_Key\t0x");
+	  for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Receive_Key[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> HLAK\t0x");
+	  for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", hlak[i]);
+	  xlog(LOG_INFO, "\n");
+	  
+	  xlog(LOG_INFO, "\t\t--> CMKey\t0x");
+	  for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmk[i]));
+	  xlog(LOG_INFO, "\n");
+	}
+            
+      xlog(LOG_INFO, "\t\t--> CMac\t0x");
+      for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmac[i]));
       xlog(LOG_INFO, "\n");
     }
   
@@ -939,8 +916,8 @@ int attribute_status_info(void* data, uint16_t attr_len)
     }
 
   /* show attribute */
-  xlog(LOG_INFO, "\t\t--> attribute ref: %s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
-  xlog(LOG_INFO, "\t\t--> status: %s (%#.2x)\n", attrib_status_str[status], status);
+  xlog(LOG_INFO, "\t\t--> attr_ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
+  xlog(LOG_INFO, "\t\t--> status\t%s (%#.2x)\n", attrib_status_str[status], status);
 
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT) return 0;
   
@@ -962,7 +939,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
 /**
  * Adapted from ssl_ppp_fork() in /ssltunnel-1.18/client/main.c
  * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
- * Alain Thivillon et Herve Schauer Consultants
+ * Alain Thivillon & Herve Schauer Consultants (c)
  *
  * @desc fork and execute pppd daemon
  * @return child pid if process is the father
@@ -992,8 +969,6 @@ int sstp_fork()
     {
       pppd_args[i++] = "logfile";   pppd_args[i++] = cfg->logfile;
       pppd_args[i++] = "debug";
-      pppd_args[i++] = "kdebug";
-      pppd_args[i++] = "7";
     }
 
   if (cfg->domain != NULL)
@@ -1002,14 +977,6 @@ int sstp_fork()
       pppd_args[i++] = cfg->domain;
     }
 
-  /* exp args */
-  pppd_args[i++] = "noipv6";
-  pppd_args[i++] = "require-mppe-128";
-  /* pppd_args[i++] = "nomppe"; */
-  pppd_args[i++] = "refuse-pap";
-  pppd_args[i++] = "refuse-mschap";
-  /* pppd_args[i++] = "refuse-mschap-v2"; */
-  pppd_args[i++] = "refuse-chap";
   
   pppd_args[i++] = NULL;
 
@@ -1067,9 +1034,12 @@ int sstp_fork()
 }
 
 
-uint8_t* sstp_hmac(unsigned char* key, unsigned char* seed, uint16_t len)
+/**
+ * Allocates a buffer filled with hmac. 
+ */
+uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
 {
-  uint8_t *res = NULL;
+  uint8_t *md = NULL;
   unsigned int mdlen, i;
   const EVP_MD* (*HASH)();
   unsigned int HASH_LEN;
@@ -1085,32 +1055,32 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* seed, uint16_t len)
       HASH = &EVP_sha256;
       HASH_LEN = SHA256_HASH_LEN;      
       break;
-      
-    default:
-      return NULL;
     }
   
-  res = (uint8_t*) xmalloc(32);
-  HMAC(HASH(), key, 32, seed, len, (uint8_t*)res, &mdlen);
+  md = (uint8_t*) xmalloc(32);
+  HMAC(HASH(), key, 32, d, n, md, &mdlen);
   
   if (mdlen != HASH_LEN)
     {
       xlog(LOG_INFO, "%s function didn't return valid data!\n",
 	   crypto_req_attrs_str[ctx->hash_algorithm]);
-      free(res);
+      free(md);
       return NULL;
     }
 
   if (mdlen < 32) 
     {
-      for (i=mdlen; i<32; i++) res[i] = 0;
+      /* filling with padding zero bytes */
+      for (i=mdlen; i<32; i++)
+	md[i] = 0;
     }
   
-  return res; 
+  return md; 
 }
 
 
-void NtPasswordHash(uint8_t *password_hash, const char *password, size_t password_len)
+/* From http:tools.ietf.org/search/rfc3079 */
+void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len)
 {
   uint8_t buf[512];
   size_t i;
@@ -1124,15 +1094,17 @@ void NtPasswordHash(uint8_t *password_hash, const char *password, size_t passwor
     }   
 
   memset(buf, 0, 512);
-  
   /* Convert password into unicode */
-  for ( i=0; i<password_len; i++ )
-    buf[i*2] = password[i];
-
+  for (i=0; i<password_len; i++)
+    {
+      buf[i*2] = password[i];
+    }
+    
   MD4_Init(&c);
   MD4_Update(&c, buf, password_len * 2);
   MD4_Final(password_hash, &c);
 }
+
 
 void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash)
 {
@@ -1142,9 +1114,7 @@ void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_has
   MD4_Final(password_hash_hash, &c);
 }
 
-/*
- * From http://tools.ietf.org/search/rfc3079
- */
+
 void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse)
 {
   SHA_CTX c;

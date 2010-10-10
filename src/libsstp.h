@@ -246,7 +246,7 @@ void generate_guid(char data[]);
 int is_valid_header(sstp_header_t* header, ssize_t recv_len);
 int is_control_packet(sstp_header_t* packet_header);
 int https_session_negociation();
-void initialize_sstp();
+void sstp_init();
 void sstp_loop();
 int sstp_decode(void* rbuffer, ssize_t sstp_length);
 int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read); 
@@ -262,14 +262,9 @@ int crypto_set_cmac();
 int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
 
-/* exp */
-<<<<<<< HEAD
-uint8_t* PRF(unsigned char* key, unsigned char* seed, uint16_t len);
-void NtPasswordHash(uint8_t *password_hash, const char *password, size_t password_len);
-=======
-uint8_t* sstp_hmac(unsigned char* key, unsigned char* seed, uint16_t len);
+/* crypto functions */
+uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n);
 void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len);
->>>>>>> c64d315b1911c09d96f72b26b2046928c616267c
 void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash);
 void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse);
 void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey, 
