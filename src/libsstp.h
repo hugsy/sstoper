@@ -261,6 +261,7 @@ int crypto_set_binding(void* data);
 int crypto_set_cmac();
 int attribute_status_info(void* data, uint16_t attr_len);
 int sstp_fork(); 
+void set_client_status(uint8_t status);
 
 /* crypto functions */
 uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n);

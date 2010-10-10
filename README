@@ -1,0 +1,84 @@
+SSTPClient, Linux SSTP client
+
+--
+
+What is SSTP ?
+
+Wikipedia says:
+"Secure Socket Tunneling Protocol (SSTP) is a form of VPN tunnel that provides a
+mechanism to transport PPP or L2TP traffic through an SSL 3.0 channel. SSL
+provides transport-level security with key-negotiation, encryption and traffic
+integrity checking. The use of SSL over TCP port 443 allows SSTP to pass through
+virtually all firewalls and proxy servers."
+http://en.wikipedia.org/wiki/Secure_Socket_Tunneling_Protocol
+
+--
+
+What is SSTPClient ?
+
+A Linux client to establish VPN communication with SSTP server. Since SSTP is
+only a wrapper over PPP communication, pppd (http://ppp.samba.org/) MUST be
+installed. 
+
+--
+
+Features:
+- IPv4 support (v6 to be tested)
+- HMAC-256 support (HMAC-160 to be tested)
+- provides a Wireshark SSTP dissector
+- 
+
+--
+
+Installing Wireshark SSTP:
+
+* Download Wireshark source from http://www.wireshark.org and un-tar archive
+* Add "dissectors/packet-sstp.c" in DISSECTOR_SRC section inside
+  `epan/CMakeLists.txt` file
+* Add "packet-sstp.c" in DISSECTOR_SRC section inside
+  `epan/dissectors/Makefile.common` file
+* In wireshark/ directory, execute :
+{{{
+   $ ./autogen.sh
+   $ ./configure --with-ssl
+   $ make
+}}}
+* You now have a SSTP-compliant Wireshark version (a simple SSTP negociation
+  PCAP file is provided in misc/ directory)
+
+--
+
+Session example:
+- first you need your server PEM-formatted CA file. It can usually be obtained
+  like this:
+  -> Go to http://<server>/certsrv
+     -> Click on "Download a CA certificate, certificate chain, or CRL" link
+     -> Select "Base64" as "Encoding method" option
+     -> Click on "Download CA certificate" link
+
+- un-tar and compile sstpclient
+{{{
+$ tar xf sstpclient.tar.gz
+$ ./configure && make
+}}}
+
+- execute
+{{{
+$ sudo ./sstpclient -s server -c server.crt -U user -P pass
+[!] Using default value: 443.
+[!] Using default value: /usr/sbin/pppd.
+Connecting to vpn.tweety.looney:443     [OK]
+ --> 244 bytes
+<-- 123 bytes
+[SSTP communication]
+(Hit Ctrl-C to close connection)
+^CSIG: Closing connection
+End of TLS connection. Reason: 2.
+Freeing regions.
+$ 
+}}}
+
+--
+
+Comments/Bugs:
+Please send me back comments and bugs to <hugsy __AT__ pyc __DOT__ li>.

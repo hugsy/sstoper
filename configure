@@ -3987,11 +3987,11 @@ errno.h \
 getopt.h \
 gnutls/gnutls.h \
 inttypes.h \
-libsstp.h \
 netdb.h \
 pty.h \
 signal.h \
-sstpclient.h \
+src/sstpclient.h \
+src/libsstp.h \
 stdarg.h \
 stdint.h \
 stdio.h \
@@ -4016,19 +4016,6 @@ fi
 
 done
 
-
-
-for ac_header in iconv.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "iconv.h" "ac_cv_header_iconv_h" "$ac_includes_default"
-if test "x$ac_cv_header_iconv_h" = x""yes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_ICONV_H 1
-_ACEOF
-
-fi
-
-done
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gnutls_init in -lgnutls" >&5
 $as_echo_n "checking for gnutls_init in -lgnutls... " >&6; }
@@ -4077,6 +4064,53 @@ else
   as_fn_error "\"GnuTLS lib required\"" "$LINENO" 5
 fi
 
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for HMAC in -lcrypto" >&5
+$as_echo_n "checking for HMAC in -lcrypto... " >&6; }
+if test "${ac_cv_lib_crypto_HMAC+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcrypto  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char HMAC ();
+int
+main ()
+{
+return HMAC ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_crypto_HMAC=yes
+else
+  ac_cv_lib_crypto_HMAC=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_crypto_HMAC" >&5
+$as_echo "$ac_cv_lib_crypto_HMAC" >&6; }
+if test "x$ac_cv_lib_crypto_HMAC" = x""yes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBCRYPTO 1
+_ACEOF
+
+  LIBS="-lcrypto $LIBS"
+
+else
+  as_fn_error "\"Crypto lib required\"" "$LINENO" 5
+fi
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for openpty in -lutil" >&5
 $as_echo_n "checking for openpty in -lutil... " >&6; }
 if test "${ac_cv_lib_util_openpty+set}" = set; then :
@@ -4121,7 +4155,7 @@ _ACEOF
   LIBS="-lutil $LIBS"
 
 else
-  as_fn_error "\"util lib required\"" "$LINENO" 5
+  as_fn_error "\"Utils lib required\"" "$LINENO" 5
 fi
 
 ac_config_files="$ac_config_files Makefile"

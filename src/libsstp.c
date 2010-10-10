@@ -22,7 +22,11 @@
 #include "sstpclient.h"
 
 
-
+/**
+ * Generate an GUID identifier for the SSTP connection
+ *
+ * @param data : buffer to store guid
+ */
 void generate_guid(char data[])
 {
   uint32_t data1, data4;
@@ -40,16 +44,28 @@ void generate_guid(char data[])
 }
 
 
+/**
+ * Change client state
+ *
+ * @param status : new status
+ */
 void set_client_status(uint8_t status)
 {
   ctx->state = status;
 
   if (cfg->verbose)
-    xlog(LOG_INFO, "Client status : %s (%#x)\n", client_status_str[ctx->state], ctx->state);
-
+    xlog(LOG_INFO, "Client status : %s (%#x)\n",
+	 client_status_str[ctx->state], ctx->state);
 }
 
 
+/**
+ * Header validation.
+ *
+ * @param header : sstp header to analyse
+ * @param recv_len : number of bytes received
+ * @return TRUE if valid, FALSE otherwise
+ */
 int is_valid_header(sstp_header_t* header, ssize_t recv_len)
 {
   
@@ -57,15 +73,15 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
     {
       if (cfg->verbose)
 	xlog(LOG_ERROR, "Invalid version (%#x)", header->version);
-      return 0;
+      return FALSE;
     }
 
-  if (header->reserved != SSTP_DATA_PACKET
-      && header->reserved != SSTP_CONTROL_PACKET)
+  if (header->reserved != SSTP_DATA_PACKET &&
+      header->reserved != SSTP_CONTROL_PACKET)
     {
       if (cfg->verbose)
 	xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
-      return 0;
+      return FALSE;
     }
 
   /*
@@ -76,38 +92,52 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
   if (ntohs(header->length) != recv_len)
     {
       if (cfg->verbose)
-	xlog(LOG_ERROR, "Unmatching length: annonced %lu, received %lu\n", ntohs(header->length), recv_len);
-      return 0;
+	xlog(LOG_ERROR, "Unmatching length: annonced %lu, received %lu\n",
+	     ntohs(header->length), recv_len);
+      return FALSE;
     }
 
-  return 1;
+  return TRUE;
 }
 
 
+/**
+ * Check whether received packet has Control flag raised.
+ *
+ * @param packet_header : received SSTP header
+ * @return TRUE if valid, FALSE otherwise
+ */
 int is_control_packet(sstp_header_t* packet_header)
 {
-  return (packet_header->reserved == SSTP_CONTROL_PACKET);
+  return (packet_header->reserved == SSTP_CONTROL_PACKET) ? TRUE : FALSE;
 }
 
 
+/**
+ * Send HTTP request to start a new SSTP connection.
+ *
+ * @return 0 if all good, negative value otherwise
+ */
 int https_session_negociation()
 {
   ssize_t rbytes;
-  char* buf;
+  char *buf;
   size_t read_size;
   char guid[39];
 
+  /* sending HTTP request */
   rbytes = -1;
   read_size = gnutls_record_get_max_size(tls);
+  memset(guid, 0, 39);
   buf = (char*) xmalloc(read_size);
   generate_guid(guid);
   
   rbytes = snprintf(buf, read_size,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
-		    "Host: %s\r\n" // <-- note: le hostname pas valide cote server 
-		    "SSTPCORRELATIONID: %s\r\n" // <-- note: on peut mettre nawak aussi
+		    "Host: %s\r\n" /* <-- note: le hostname jamais valide cote serveur */
+		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak aussi */
 		    "Content-Length: %llu\r\n"
-		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth: True\r\n"
+		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
@@ -118,7 +148,8 @@ int https_session_negociation()
     xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
 
   sstp_send(buf, rbytes);
-  
+
+  /* waiting for and parsing response */
   memset(buf, 0, read_size);
   rbytes = gnutls_record_recv (tls, buf, read_size);
       
@@ -144,11 +175,13 @@ int https_session_negociation()
     return -3;
 
   free(buf);
+  
   return 0;
 }
 
 /**
- * Emits negociation request
+ * Emits SSTP negociation request, ie Control message with
+ * ENCAPSULATED_PROTOCOL_ID attribute.
  */
 void sstp_init()
 {
@@ -181,7 +214,13 @@ void sstp_init()
  * - start an SSTP negociation
  * - handle receive packets
  * - send packets
- * When connection is over (ie client status is disconnected), free those regions
+ *
+ * When connection is over (i.e. client status is disconnected), free those regions.
+ *
+ * Output stream behaviour (i.e. to server):
+ * pppd --> write(1, data) --> sstpclient --> write(tls, data) --> data
+ * Input stream behaviour (i.e. from server):
+ * pppd <-- write(0, data) <-- sstpclient <-- read(tls, data) <-- data
  */
 void sstp_loop()
 {
@@ -206,7 +245,7 @@ void sstp_loop()
   /* start sstp negociation */
   sstp_init();
 
-
+  /* main loop */
   while(ctx->state != CLIENT_CALL_DISCONNECTED)
     {
       FD_ZERO(&msrd);
@@ -256,7 +295,8 @@ void sstp_loop()
 	      retcode = sstp_decode(rbuffer, rbytes);
 	    }
 	  
-	  if (retcode < 0) break;
+	  if (retcode < 0)
+	    break;
 	}
 
     }
@@ -265,11 +305,22 @@ void sstp_loop()
 }
 
 
+/**
+ * Decodes SSTP packet, checks first its header. If control packet, parse it and load
+ * eventual attribute function
+ *
+ * @param rbuffer : buffer received from SSTP server
+ * @param sstp_length : buffer length
+ * @return 0 if decoding was successful, negative value otherwise. A special case was done
+ * for invalid header since there seems to be a problem with server packet length. In this
+ * case, received packet is just dropped.
+ */
 int sstp_decode(void* rbuffer, ssize_t sstp_length)
 {
   sstp_header_t* sstp_header;
   int is_control, retcode;
 
+  /* packet validation */
   sstp_header = (sstp_header_t*) rbuffer;
   if (!is_valid_header(sstp_header, sstp_length))
     {
@@ -277,6 +328,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       return 0;
     } 
 
+  /* determine sstp packet type */
   is_control = is_control_packet(sstp_header);
   
   if (cfg->verbose)
@@ -311,6 +363,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  return -1;
 	}
 
+      /* fetching type */
       if (!control_type || control_type > SSTP_MSG_ECHO_REPONSE)
 	{
 	  xlog(LOG_ERROR, "Incorrect control packet\n");
@@ -321,8 +374,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       /* parsing control header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n", control_messages_types_str[control_type],
-	       control_type);
+	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
+	       control_messages_types_str[control_type], control_type);
 	  xlog(LOG_INFO, "\t-> attribute number: %d\n", control_num_attributes);
 	}
       
@@ -451,6 +504,14 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 }
 
 
+/**
+ * Decode and parse every attribute provided within an SSTP control packet.
+ *
+ * @param attrnum : number of attributes
+ * @param data : pointer to the beginning of attributes buffer
+ * @param bytes_to_read : `data` length
+ * @return 0 if all good, negative value otherwise
+ */
 int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read) 
 {
   void* attr_ptr;
@@ -496,7 +557,8 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 
       switch (attribute_id)
 	{
-	case SSTP_ATTRIB_NO_ERROR: break;
+	case SSTP_ATTRIB_NO_ERROR:
+	  break;
 
 	case SSTP_ATTRIB_STATUS_INFO:
 	  retcode = attribute_status_info(attribute_data, attribute_length);
@@ -506,7 +568,7 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 	  retcode = crypto_set_binding(attribute_data);
 	  break;
 
-	  /* cas a ne pas traiter pour un client */
+	  /* case not to be treated on client side, ignoring */
 	case SSTP_ATTRIB_CRYPTO_BINDING:
 	case SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID:
 	default:
@@ -515,7 +577,8 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 	}
 
       if (retcode < 0) break;
-            
+
+      /* shifting to next attribute */
       attr_ptr += attribute_length;
       attrnum--;
     }
@@ -524,6 +587,12 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 }
 
 
+/**
+ * Generic function to send SSTP data to the server.
+ *
+ * @param data : buffer to be sent
+ * @param data_length : `data` length
+ */
 void sstp_send(void* data, size_t data_length)
 {
   ssize_t sbytes;
@@ -541,6 +610,14 @@ void sstp_send(void* data, size_t data_length)
 }
 
 
+/**
+ * Encapsulated data provided as argument inside a SSTP packet. SSTP packet type
+ * (control|data) should be specified throught `type` argument.
+ *
+ * @param type : set packet type (Control or Data)
+ * @param data : buffer to be sent
+ * @param data_length : `data` length
+ */
 void send_sstp_packet(uint8_t type, void* data, size_t data_length)
 {
   sstp_header_t sstp_header;
@@ -565,6 +642,15 @@ void send_sstp_packet(uint8_t type, void* data, size_t data_length)
 }
 
 
+/**
+ * Generic function to send an SSTP Data packet. Data to send is encapsulated
+ * inside an SSTP packet, and transmitted througth TLS session.
+ * As this function intercepts PPP packets, it is also used to detect PPP
+ * negociation success, and stores NT Response code inside client chap_ctx.
+ *
+ * @param data : buffer to be sent
+ * @param len : `data` length
+ */
 void send_sstp_data_packet(void* data, size_t len) 
 {
   if ( ntohs(*((uint16_t*)data)) == 0xc223 )
@@ -582,6 +668,15 @@ void send_sstp_data_packet(void* data, size_t len)
 }
 
 
+/**
+ * Generic function to send an SSTP control packet. As a control packet embeds one
+ * or many attributes, they also should be specified.
+ *
+ * @param msg_type : SSTP control message type
+ * @param attributes : pointer to the attributes buffer
+ * @param attribute_number : number of attributes inside buffer
+ * @param attributes_len : `attributes` length
+ */
 void send_sstp_control_packet(uint16_t msg_type, void* attributes,
 			      uint16_t attribute_number, size_t attributes_len)
 {
@@ -627,6 +722,14 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
 }
 
 
+/**
+ * Allocates and fills an attribute with specified data.
+ *
+ * @param attribute_id : attribute code
+ * @param data : data to be inserted
+ * @param data_length : `data` length
+ * @return a pointer to the new attribute buffer
+ */
 void* create_attribute(uint8_t attribute_id, void* data, size_t data_length)
 {
   sstp_attribute_header_t attribute_header;
@@ -649,6 +752,15 @@ void* create_attribute(uint8_t attribute_id, void* data, size_t data_length)
 }
 
 
+/**
+ * On receiving a binding request, this function is triggered to prepare
+ * cryptographic properties. It selects strongest negociated hash algorithm,
+ * stores Nonce into client SSTP context, invoke certhash(), and changes client
+ * state.
+ *
+ * @param data : pointer to crypto binding request packet
+ * @return 0 if all good, negative value otherwise
+ */
 int crypto_set_binding(void* data)
 {
   sstp_attribute_crypto_bind_req_t* req;
@@ -702,6 +814,14 @@ int crypto_set_binding(void* data)
 }
 
 
+/**
+ * This function is called by crypto_set_binding() and computes server certificate
+ * hash. Since certificate is provided as PEM format, it is first exported to DER
+ * binary format, hashed with context-defined algorithm, and stored inside client
+ * SSTP context.
+ *
+ * @return 0 if all good, negative value otherwise
+ */
 int crypto_set_certhash()
 {
   int val,i;
@@ -745,15 +865,20 @@ int crypto_set_certhash()
 }
 
 
+/**
+ * Defines Compound Mac value and store its value into SSTP client context.
+ * 
+ * @return 0 on SUCCESS, < 0 on ERROR
+ */
 int crypto_set_cmac()
 { 
   unsigned int i = 0;
-  unsigned char buffer[112];
   uint16_t hash_len;
+  unsigned char Call_Connected_buffer[112];
   
   uint8_t hlak[32];
   uint8_t *cmac, *cmk;
-  uint8_t seed[32];
+  uint8_t msg[32];
   uint8_t PasswordHash[MD4_DIGEST_LENGTH];
   uint8_t PasswordHashHash[MD4_DIGEST_LENGTH];
   uint8_t NT_Response[24];
@@ -763,15 +888,22 @@ int crypto_set_cmac()
 
   uint8_t* ptr = NULL;
 
+  unsigned char Call_Connected_header[16] = 
+    {
+      0x10, 0x01, 0x00, 0x70, 0x00, 0x04, 0x00, 0x01,
+      0x00, 0x03, 0x00, 0x68, 0x00, 0x00, 0x00, 0x02
+    };
+  
   memset(hlak, 0, 32);
   memset(PasswordHash, 0, MD4_DIGEST_LENGTH);
   memset(PasswordHashHash, 0, MD4_DIGEST_LENGTH);
   memset(NT_Response, 0, 24);
-  memset(buffer, 0, 112);
+  memset(Call_Connected_buffer, 0, 112);
+
   
-  /* crypto fun time (http://tools.ietf.org/search/rfc2759#section-8.3) */
+  /* Crypto super fun time */
   
-  /* setting HLAK */
+  /* Setting HLAK */
   NtPasswordHash( PasswordHash, (const uint8_t *)cfg->password, strlen(cfg->password) );
   HashNtPasswordHash( PasswordHashHash, PasswordHash );
   memcpy( NT_Response, chap_ctx->response_nt_response, 24 );
@@ -797,7 +929,7 @@ int crypto_set_cmac()
    * Where SSTP_CALL_CONNECTED_MSG_ZEROED is SSTP_CALL_CONNECTED_MSG with CMAC field
    * filled with 0 (zero)
    */
-  ptr = seed;
+  ptr = msg;
   memcpy(ptr, SSTP_SEED_PREFIX, strlen(SSTP_SEED_PREFIX));
   ptr += strlen(SSTP_SEED_PREFIX);
   
@@ -811,7 +943,8 @@ int crypto_set_cmac()
   memcpy(ptr, &hash_len, sizeof(uint16_t)); ptr += sizeof(uint16_t);
   *ptr = 0x01; ptr ++;
 
-  if ( (cmk = sstp_hmac(hlak, seed, 32)) == NULL) return -1;
+  if ( (cmk = sstp_hmac(hlak, msg, 32)) == NULL)
+    return -1;
   
   
   /* T2 */
@@ -820,13 +953,13 @@ int crypto_set_cmac()
    * message(section 2.2.11) with the Compound MAC field and Padding field zeroed out."
    */
   
-  /* bad ass quick'n dirty buffer filling, to improve */
-  ptr = buffer;
-  memcpy(ptr, "\x10\x01\x00\x70\x00\x04\x00\x01\x00\x03\x00\x68\x00\x00\x00\x02", 16); ptr+= 16;
+  ptr = Call_Connected_buffer;
+  memcpy(ptr, Call_Connected_header, 16); ptr+= 16;
   memcpy(ptr, ctx->nonce, 32); ptr += 32;
   memcpy(ptr, ctx->certhash, 32); ptr += 32;
-  xlog(LOG_INFO,"buf: "); for (i=0; i<112; i++) xlog(LOG_INFO, "%.2x", buffer[i]); xlog(LOG_INFO,"\n");
-  if ( !(cmac = sstp_hmac(cmk, buffer, 112)) ) return -1;
+
+  if ( !(cmac = sstp_hmac(cmk, Call_Connected_buffer, 112)) )
+    return -1;
   
   memcpy(ctx->cmk, cmk, 32);
   memcpy(ctx->cmac, cmac, 32);
@@ -851,8 +984,8 @@ int crypto_set_cmac()
 
       if (cfg->verbose > 2)
 	{
-	  xlog(LOG_INFO, "\t\t--> Seed\t0x");
-	  for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", seed[i]);
+	  xlog(LOG_INFO, "\t\t--> T1 msg\t0x");
+	  for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", msg[i]);
 	  xlog(LOG_INFO, "\n");
 	  
 	  xlog(LOG_INFO, "\t\t--> H(Pwd)\t0x");
@@ -892,6 +1025,10 @@ int crypto_set_cmac()
       for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmac[i]));
       xlog(LOG_INFO, "\n");
     }
+
+  /* disable negociation timer */
+  alarm(0);
+  alarm(0);
   
   return 0;
 }
@@ -942,8 +1079,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
  * Alain Thivillon & Herve Schauer Consultants (c)
  *
  * @desc fork and execute pppd daemon
- * @return child pid if process is the father
- * @return none otherwise (execv pppd)
+ * @return child pid if process is the father or error otherwise (execv pppd)
  **/
 int sstp_fork() 
 {
@@ -1035,34 +1171,46 @@ int sstp_fork()
 
 
 /**
- * Allocates a buffer filled with hmac. 
+ * HMAC function wrapper, this function calculates HMAC value of a n-length message
+ * with the key `key`. Created HMAC buffered has to be freed later.
+ * 
+ * @param key is the HMAC key
+ * @param d is the message to be hashed
+ * @param n is `d` string length
+ * @return a pointer to HMAC result buffer.
  */
 uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
 {
   uint8_t *md = NULL;
   unsigned int mdlen, i;
-  const EVP_MD* (*HASH)();
-  unsigned int HASH_LEN;
-
+  const EVP_MD* (*hmac)();
+  unsigned int hash_len;
+  
   switch (ctx->hash_algorithm) 
     {
     case CERT_HASH_PROTOCOL_SHA1:
-      HASH = &EVP_sha1;
-      HASH_LEN = SHA1_HASH_LEN;
+      hmac = &EVP_sha1;
+      hash_len = SHA1_HASH_LEN;
       break;
       
     case CERT_HASH_PROTOCOL_SHA256:
-      HASH = &EVP_sha256;
-      HASH_LEN = SHA256_HASH_LEN;      
+      hmac = &EVP_sha256;
+      hash_len = SHA256_HASH_LEN;      
       break;
     }
   
   md = (uint8_t*) xmalloc(32);
-  HMAC(HASH(), key, 32, d, n, md, &mdlen);
-  
-  if (mdlen != HASH_LEN)
+
+  if (HMAC(hmac(), key, 32, d, n, md, &mdlen) == NULL) 
     {
-      xlog(LOG_INFO, "%s function didn't return valid data!\n",
+      xlog(LOG_ERROR, "Failed to compute HMAC\n");
+      free(md);
+      return NULL;
+    }
+  
+  if (mdlen != hash_len)
+    {
+      xlog(LOG_ERROR, "%s function didn't return valid data!\n",
 	   crypto_req_attrs_str[ctx->hash_algorithm]);
       free(md);
       return NULL;
@@ -1079,7 +1227,12 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
 }
 
 
-/* From http:tools.ietf.org/search/rfc3079 */
+/**
+ * Functions defined below are only used to generate correct CMac value
+ * Also see:
+ * - http:tools.ietf.org/search/rfc3079
+ * - http:tools.ietf.org/search/rfc2759
+ */
 void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len)
 {
   uint8_t buf[512];

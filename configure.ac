@@ -14,11 +14,11 @@ errno.h \
 getopt.h \
 gnutls/gnutls.h \
 inttypes.h \
-libsstp.h \
 netdb.h \
 pty.h \
 signal.h \
-sstpclient.h \
+src/sstpclient.h \
+src/libsstp.h \
 stdarg.h \
 stdint.h \
 stdio.h \
@@ -32,7 +32,8 @@ time.h \
 unistd.h)
 
 AC_CHECK_LIB(gnutls, gnutls_init,, AC_MSG_ERROR("GnuTLS lib required"))
-AC_CHECK_LIB(util, openpty,, AC_MSG_ERROR("util lib required"))
+AC_CHECK_LIB(crypto, HMAC,, AC_MSG_ERROR("Crypto lib required"))
+AC_CHECK_LIB(util, openpty,, AC_MSG_ERROR("Utils lib required"))
 AC_CONFIG_FILES([Makefile])
 
 dnl Create output

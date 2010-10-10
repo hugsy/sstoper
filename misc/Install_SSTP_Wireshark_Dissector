@@ -1,6 +1,0 @@
-- récupérer les sources de wireshark
-- ajouter "dissectors/packet-sstp.c" dans DISSECTOR_SRC du fichier epan/CMakeLists.txt
-- ajouter "packet-sstp.c" dans DISSECTOR_SRC du fichier epan/dissectors/Makefile.common
-$ ./autogen.sh
-$ ./configure --with-ssl
-$ make

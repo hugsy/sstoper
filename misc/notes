@@ -1,4 +1,0 @@
-pour choper des certificates du server
-http://<server>/certsrv
-   -> Download a CA certificate, certificate chain, or CRL
-      -> Download CA certificate

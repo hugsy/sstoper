@@ -25,26 +25,41 @@ static int init_tls_session();
 static int check_tls_session();
 static void end_tls_session(int);
 
-
+/**
+ * Logging function, displays log message to stderr.
+ *
+ * @param type : event type
+ * @param fmt : format string
+ */
 void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;
   
-  va_start(ap, fmt);
-  
   switch (type) 
     {
     case LOG_DEBUG:
-    case LOG_INFO:
+      fprintf(stderr, "[*] ");
+      break;
     case LOG_ERROR:
-      vfprintf(stderr, fmt, ap);
+      fprintf(stderr, "[!] ");
+      break;     
+    case LOG_INFO:
+    default :
       break;
     }
+  
+  va_start(ap, fmt);  
+  vfprintf(stderr, fmt, ap);
   fflush(stderr);
   va_end(ap);
 }
 
 
+/**
+ * malloc(3) wrapper. Checks size and zero-fill buffer.
+ *
+ * @param size: buffer size to allocate
+ */
 void* xmalloc(size_t size)
 {
   void *ptr;
@@ -68,28 +83,32 @@ void* xmalloc(size_t size)
 }
 
 
+/**
+ * Usage
+ */
 void usage(char* name, int retcode)
 {
   FILE* fd;
   
-  if (retcode==0)
-    fd = stdout;
-  else
-    fd = stderr;
+  fd = (retcode == 0) ? stdout : stderr;
       
   fprintf(fd,
-	  "SSTPClient: SSTP VPN client for Linux\n"
-	  "Usage: %s [ARGUMENTS]\n"
-	  "\t-s, --server <sstp.server.address> (mandatory)\tSSTP Server\n"
-	  "\t-c, --ca-file /path/to/ca_file (mandatory)\tTrusted CA file (only PEM format supported)\n"
-	  "\t-U, --username USERNAME (mandatory)\tWindows username\n"
-	  "\t-P, --password PASSWORD (mandatory)\tWindows password\n"	  
-	  "\t-p, --port NUM \tAlternative server port (default: 443)\n"
-	  "\t-x, --pppd-path /path/to/pppd \tSpecifies path to pppd executable (default: /usr/sbin/pppd)\n"
-	  "\t-v, --verbose\tVerbose mode\n"
-	  "\t-l, --logfile /path/to/pppd_logfile\tLog pppd activity in specified file\n"
-	  "\t-d, --domain MyWindowsDomain\tSpecify Windows domain for authentication\n"	  
-	  "\t-h, --help\tShow this menu\n"
+	  "SSTPClient\n"
+	  "--\n"
+	  "SSTP VPN client for Linux\n"
+	  "----------------------------------------------------------------------\n\n"
+	  "Usage:\n\t%s -s server -c ca_file -U username -P password [OPTIONS]\n"
+	  "\nOPTIONS:\n"
+	  "\t-s, --server\tSSTP.Server.com (mandatory)\tSSTP Server URI\n"
+	  "\t-c, --ca-file\t/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
+	  "\t-U, --username\tUSERNAME (mandatory)\t\tWindows username\n"
+	  "\t-P, --password\tPASSWORD (mandatory)\t\tWindows password\n"	  
+	  "\t-p, --port NUM\t\t\t\t\tAlternative server port (default: 443)\n"
+	  "\t-x, --pppd-path\t/path/to/pppd\t\t\tSpecifies path to pppd executable (default: /usr/sbin/pppd)\n"
+	  "\t-v, --verbose\t\t\t\t\tIncrease verbose mode\n"
+	  "\t-l, --logfile\t/path/to/pppd_logfile\t\tLog pppd activity in specified file\n"
+	  "\t-d, --domain\tMyWindowsDomain\t\t\tSpecify Windows domain for authentication\n"	  
+	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  name);
   
@@ -97,6 +116,9 @@ void usage(char* name, int retcode)
 }
 
 
+/**
+ * Parse options
+ */
 void parse_options (sstp_config* cfg, int argc, char** argv)
 {
   int curopt, curopt_idx;
@@ -126,7 +148,6 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       
       switch (curopt)
 	{
-	case 'h': usage (argv[0], EXIT_SUCCESS);
 	case 'v': cfg->verbose++; break;
 	case 's': cfg->server = optarg; break;
 	case 'p': cfg->port = optarg; break;
@@ -135,7 +156,9 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	case 'P': cfg->password = optarg; break;
 	case 'x': cfg->pppd_path = optarg; break;	  
 	case 'l': cfg->logfile = optarg; break;
-	case 'd': cfg->domain = optarg; break;	  
+	case 'd': cfg->domain = optarg; break;
+	case 'h':
+	  usage (argv[0], EXIT_SUCCESS);
   	case '?':
 	default:
 	  usage (argv[0], EXIT_FAILURE);
@@ -145,6 +168,12 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 }
 
 
+/**
+ * Validates presence of a mandatory argument. Parameter absence will exit
+ * on error.
+ *
+ * @param argument : argument to be checked
+ */
 void check_required_arg(char* argument)
 {
   if (argument == NULL)
@@ -155,36 +184,49 @@ void check_required_arg(char* argument)
 }
 
 
+/**
+ * Validates presence of an optional argument. 
+ *
+ * @param argument : argument to be checked
+ * @param default_value : default value to be used if undefined
+ */
 void check_default_arg(char** argument, char* default_value)
 {
   if ((*argument) == NULL)
     {
-      xlog(LOG_ERROR, "Using default value: %s.\n", default_value);
+      xlog(LOG_ERROR, "Using default value: %s\n", default_value);
       *argument = default_value;
     }
 }
 
 
+/**
+ * Initiates TCP connection to `hostname` on port `port`
+ *
+ * @param hostname : host to connect to
+ * @param port : TCP port `hostname` is listening
+ * @return a socket (fd > 2) on success, a negative value on failure
+ */
 static sock_t init_tcp(char* hostname, char* port)
 {
   sock_t sock;
-  struct addrinfo *hostinfo, *res, *ll;
+  struct addrinfo hostinfo, *res, *ll;
 
-  hostinfo = (struct addrinfo*) xmalloc(sizeof(struct addrinfo));
-  hostinfo->ai_family = AF_UNSPEC;
-  hostinfo->ai_socktype = SOCK_STREAM;
-  hostinfo->ai_flags = 0;
-  hostinfo->ai_protocol = 0;
+  hostinfo.ai_family = AF_UNSPEC;
+  hostinfo.ai_socktype = SOCK_STREAM;
+  hostinfo.ai_flags = 0;
+  hostinfo.ai_protocol = 0;
 
+  /* TODO: tester en ip6 */
   xlog(LOG_INFO, "Connecting to %s:%s ", hostname, port);
   
-  if (getaddrinfo(hostname, port, hostinfo, &res) == -1)
+  if (getaddrinfo(hostname, port, &hostinfo, &res) == -1)
     {
       perror("getaddrinfo");
       return -1;
     }
   
-  for (ll=res; ll != NULL; ll=ll->ai_next)
+  for (ll = res; ll != NULL; ll = ll->ai_next)
     {
       sock = socket(ll->ai_family,
 		    ll->ai_socktype,
@@ -201,26 +243,33 @@ static sock_t init_tcp(char* hostname, char* port)
   
   if (ll == NULL)
     {
-      xlog(LOG_ERROR, "Failed to create connection.\n");
-      perror("init_tcp");
+      xlog(LOG_INFO, "\t[KO]\nFailed to create connection.\n");
+      xlog(LOG_ERROR, "No valid socket\n");
       return -1;
     }
 
-  xlog(LOG_INFO, "\tOK [%ld]\n", sock);
+  xlog(LOG_INFO, "\t[OK]");
+  if (cfg->verbose) xlog(LOG_INFO, " (%ld)", sock);
+  xlog(LOG_INFO, "\n");
 
   freeaddrinfo(res);
-  free(hostinfo);
  
   return sock;
 }
 
 
+/**
+ * Wrapper socket in a GnuTLS session. There is no server certificate validation.
+ *
+ * @return 0 on success, or -1 on error.
+ */
 static int init_tls_session()
 {
   int retcode;
   const char* err;
   gnutls_certificate_credentials_t creds;
 
+  
   /* initialize and allocate */
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
@@ -228,7 +277,7 @@ static int init_tls_session()
   retcode = gnutls_record_set_max_size(tls, SSTP_MAX_BUFFER_SIZE);
   if (retcode != GNUTLS_E_SUCCESS)
     {
-      gnutls_perror(retcode);
+      xlog(LOG_ERROR, "gnutls_record_set_max_size: %s", gnutls_strerror(retcode));
       return -1;
     }
   
@@ -237,9 +286,8 @@ static int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
-        {
-          xlog(LOG_ERROR, (char*)err);
-        }
+	xlog(LOG_ERROR, (char*)err);
+      
       return -1;
     }
 
@@ -254,8 +302,8 @@ static int init_tls_session()
   retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
-      xlog(LOG_ERROR, "init_tls_session:At least 1 certificate must be valid.\n");
-      gnutls_perror(retcode);
+      xlog(LOG_ERROR, "gnutls_certificate_set_x509_trust_file: no valid certificate.\n%s",
+	   gnutls_strerror(retcode));
       return -1;
     }
 
@@ -263,8 +311,8 @@ static int init_tls_session()
   retcode = gnutls_credentials_set (tls, GNUTLS_CRD_CERTIFICATE, &creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      xlog(LOG_ERROR, "init_tls_session:tls_credentials_set\n");
-      gnutls_perror(retcode);
+      xlog(LOG_ERROR, "init_tls_session: tls_credentials_set\n%s",
+	   gnutls_strerror(retcode));
       return -1;
     }
 
@@ -277,8 +325,8 @@ static int init_tls_session()
   retcode = gnutls_handshake (tls);
   if (retcode != GNUTLS_E_SUCCESS)
     {
-      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n");
-      gnutls_perror (retcode);
+      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n%s",
+	   gnutls_strerror(retcode));
       end_tls_session(retcode);
       return -1;
     }
@@ -287,15 +335,20 @@ static int init_tls_session()
   retcode = check_tls_session();
   if (retcode < 0 )
     {
-      xlog(LOG_ERROR, "init_tls_session: fail to check tls server certificate\n");
-      gnutls_perror(retcode);
+      xlog(LOG_ERROR, "init_tls_session: fail to check tls server certificate\n%s",
+	   gnutls_strerror(retcode));
       return -1;
     }
-    
+
   return 0;
 }
 
 
+/**
+ * Ends nicely TLS session
+ *
+ * @param reason: disconnection reason
+ */ 
 static void end_tls_session(int reason)
 {
   int retcode;
@@ -324,13 +377,18 @@ static void end_tls_session(int reason)
 }
 
 
+/**
+ * Checks certificate list
+ *
+ * @return 0 if all is good, -1 if not.
+ */
 static int check_tls_session()
 {
   const gnutls_datum_t *certificate_list;
   unsigned int certificate_list_size;
   int retcode, i;
    
-  /* verification de la CA trust list */
+  /* CA trust list verification */
   retcode = gnutls_certificate_type_get (tls);
   if (retcode != GNUTLS_CRT_X509)
     {
@@ -359,6 +417,11 @@ static int check_tls_session()
 }
 
 
+/**
+ * Signal handling function.
+ * 
+ * @param signum : signal number
+ */
 void sighandle(int signum)
 {
   int status = 0;
@@ -366,15 +429,16 @@ void sighandle(int signum)
   switch(signum) 
     {
     case SIGALRM:
-      xlog(LOG_INFO, "Timer ends\n");
+      xlog(LOG_INFO, "Timer has expired, disconnecting\n");
+      set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
 
     case SIGCHLD:
       waitpid(ctx->pppd_pid, &status, WNOHANG);     
       xlog(LOG_INFO, "Process pppd (%d) has died with retcode %d\n", ctx->pppd_pid, status);
-      end_tls_session(signum);
-      free(cfg);
-      exit(signum);
+
+      set_client_status(CLIENT_CALL_DISCONNECTED);
+      break;
       
     case SIGINT:
     case SIGTERM:
@@ -383,20 +447,39 @@ void sighandle(int signum)
 	  kill(ctx->pppd_pid, SIGINT);
 	  waitpid(ctx->pppd_pid, &status, 0);
 	}
-
-      xlog(LOG_INFO, "SIG: Closing connection\n");
-      end_tls_session(SIGINT);
-      free(cfg);
-      exit(signum);
+      
+      xlog(LOG_INFO, "Signal received: Closing connection\n");
+      set_client_status(CLIENT_CALL_DISCONNECTED);
+      break;      
     }
 }
 
 
-int main (int argc, char* argv[]) 
+/**
+ * Main function:
+ * - set up signal handler
+ * - parse & set upconfiguration
+ * - initialize tcp connection
+ * - initialize tls socket
+ * - triggers https negocation
+ *
+ * @param argc: number of command-line argument
+ * @param argv: array of command-line argument
+ * @param envp: array of environment argument
+ * @return EXIT_SUCCESS if all good, EXIT_FAILURE otherwise
+ */
+int main (int argc, char** argv, char** envp)
 {
   sigset_t sigset;
   struct sigaction saction;
   int retcode;
+
+  /* check user identifier */
+  if (getuid() != 0) 
+    {
+      xlog (LOG_ERROR, "pppd requires sstpclient to be executed with root privileges.\n");
+      return EXIT_FAILURE;
+    }
     
   /* SIGTERM and SIGINT close the connection properly */
   /* set signal bitmask */
@@ -435,8 +518,12 @@ int main (int argc, char* argv[])
   
   /* create socket  */
   sockfd = init_tcp(cfg->server, cfg->port); 
-  if (sockfd < 0)
-    return EXIT_FAILURE;
+  if (sockfd < 0) 
+    {
+      xlog(LOG_ERROR, "Failed to setup TCP socket, leaving\n");
+      free(cfg);
+      return EXIT_FAILURE;
+    }
 
   
   /* allocate and start gnutls session */
@@ -444,28 +531,40 @@ int main (int argc, char* argv[])
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to initialize TLS session, leaving.\n");
+      free(cfg);
       return EXIT_FAILURE;
     }
 
   
   /* http over ssl nego */
-  if (cfg->verbose) xlog(LOG_INFO, "Performing HTTPS transaction\n");
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Performing HTTPS transaction\n");
+  
   retcode = https_session_negociation();  
-  if (retcode < 0) 
-    goto end;
-
+  if (retcode < 0)
+    {
+      xlog(LOG_ERROR, "An error occured in HTTPS negocation, leaving\n");
+      end_tls_session(EXIT_FAILURE);
+      free(cfg);
+      return EXIT_FAILURE;
+    }
+    
 
   /* starting sstp */
-  if (cfg->verbose) xlog(LOG_INFO, "Initiating SSTP negociation\n");
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Initiating SSTP negociation\n");
+  
   sstp_loop();
 
   
-  /* end gnutls session and free allocated memory */
- end:  
-  if (cfg->verbose) xlog(LOG_INFO, "SSTP dialog end\n");
-  end_tls_session(EXIT_SUCCESS);
+  /* end gnutls session */ 
+  if (cfg->verbose)
+    xlog(LOG_INFO, "SSTP dialog ends successfully\n");
   
-  free((void*) cfg);
+  end_tls_session(EXIT_SUCCESS);
+
+  /* free allocated memory */
+  free(cfg);
   
   return EXIT_SUCCESS;
 }
