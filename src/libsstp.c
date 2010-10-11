@@ -4,19 +4,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <arpa/inet.h>
-#include <gnutls/gnutls.h>
-#include <sys/select.h>
 #include <time.h>
 #include <errno.h>
 #include <pty.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <openssl/sha.h>
 #include <openssl/md4.h>
 #include <openssl/hmac.h>
 #include <openssl/md4.h>
 #include <gnutls/x509.h>
+#include <gnutls/gnutls.h>
 
 #include "libsstp.h"
 #include "sstpclient.h"
@@ -31,9 +32,15 @@ void generate_guid(char data[])
 {
   uint32_t data1, data4;
   uint16_t data2, data3;
-
+  struct timeval tv;
+  unsigned int seed;
+  
+  gettimeofday(&tv, NULL);
+  seed = tv.tv_usec * tv.tv_sec;
+  seed ^= getpid();
+      
   memset(data, 0, 39);
-  srand (time (NULL));
+  srand (seed);
   data1 = (rand() + 1) * (sizeof(uint32_t) * 8);
   data2 = (rand() + 1) * (sizeof(uint16_t) * 8);
   data3 = (rand() + 1) * (sizeof(uint16_t) * 8);
@@ -301,6 +308,7 @@ void sstp_loop()
 
     }
   
+  free(chap_ctx);
   free(ctx);
 }
 
@@ -452,7 +460,12 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       void* data_ptr;
       data_ptr = rbuffer + sizeof(sstp_header_t);
 
-      /* http:tools.ietf.org/search/rfc2759#section-4 */
+      /*
+       * On intercepting a PPP success message, sstpclient will also send
+       * a SSTP_MSG_CALL_CONNECTED message, allowing PPP data to be treated 
+       * on server side.
+       * See also : http://tools.ietf.org/search/rfc2759#section-4
+       */
       
       if ( ntohs(*((uint16_t*)data_ptr)) == 0xc223 )
 	{
@@ -488,6 +501,9 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      /* and set hello timer */
 	      alarm(ctx->hello_timer.tv_sec);
 	      set_client_status(CLIENT_CALL_CONNECTED);
+
+	      /* send an sstp ping, response will stop the alarm */
+	      send_sstp_control_packet(SSTP_MSG_ECHO_REQUEST, NULL, 0, 0);
 	    }
 	}
       
@@ -528,6 +544,12 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
       void* attribute_data;
       uint8_t attribute_id;
       uint16_t attribute_length;
+
+      if (bytes_to_read < sizeof(sstp_attribute_header_t)) 
+	{
+	  xlog(LOG_ERROR, "Incorrect attribute received. Leaving...\n");
+	  return -1;
+	}
       
       attribute_header = (sstp_attribute_header_t*) attr_ptr;
       attribute_id = attribute_header->attribute_id;
@@ -539,7 +561,7 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
       bytes_to_read -= attribute_length;
       if (bytes_to_read < 0) 
 	{
-	  xlog(LOG_ERROR, "Trying to read at incorrect offset in control packet.\n");
+	  xlog(LOG_ERROR, "Incorrect offset attempt. Leaving...\n");
 	  return -1;
 	}
       if (attribute_id > SSTP_ATTRIB_CRYPTO_BINDING_REQ)
@@ -968,7 +990,7 @@ int crypto_set_cmac()
   free(cmac);
 
   
-  /* Debug */
+  /* Verbose output displays brief crypto information */
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t\t--> hash algo\t%s (%#.2x)\n",
@@ -982,6 +1004,7 @@ int crypto_set_cmac()
       for(i=0; i<8; i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->certhash[i]));
       xlog(LOG_INFO, "\n");
 
+      /* debug output is much more verbose */
       if (cfg->verbose > 2)
 	{
 	  xlog(LOG_INFO, "\t\t--> T1 msg\t0x");
@@ -1019,15 +1042,16 @@ int crypto_set_cmac()
 	  xlog(LOG_INFO, "\t\t--> CMKey\t0x");
 	  for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmk[i]));
 	  xlog(LOG_INFO, "\n");
+	  
 	}
             
       xlog(LOG_INFO, "\t\t--> CMac\t0x");
       for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmac[i]));
       xlog(LOG_INFO, "\n");
+      
     }
 
   /* disable negociation timer */
-  alarm(0);
   alarm(0);
   
   return 0;
@@ -1087,7 +1111,7 @@ int sstp_fork()
   int retcode, amaster, aslave, i;
   struct termios pty;
   char *pppd_path;
-  char *pppd_args[128];
+  char *pppd_args[16];
 
   
   pppd_path = cfg->pppd_path;
@@ -1098,12 +1122,15 @@ int sstp_fork()
   pppd_args[i++] = "local";
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
-  pppd_args[i++] = "user"; pppd_args[i++] = cfg->username;
-  pppd_args[i++] = "password"; pppd_args[i++] = cfg->password;
+  pppd_args[i++] = "user";
+  pppd_args[i++] = cfg->username;
+  pppd_args[i++] = "password";
+  pppd_args[i++] = cfg->password;
 
   if (cfg->logfile != NULL) 
     {
-      pppd_args[i++] = "logfile";   pppd_args[i++] = cfg->logfile;
+      pppd_args[i++] = "logfile";
+      pppd_args[i++] = cfg->logfile;
       pppd_args[i++] = "debug";
     }
 
@@ -1138,8 +1165,7 @@ int sstp_fork()
       
       if (aslave > 2) close(aslave);
       if (amaster > 2) close(amaster);
-
-    
+  
       return ppp_pid;
     }
   

@@ -17,8 +17,6 @@ inttypes.h \
 netdb.h \
 pty.h \
 signal.h \
-src/sstpclient.h \
-src/libsstp.h \
 stdarg.h \
 stdint.h \
 stdio.h \

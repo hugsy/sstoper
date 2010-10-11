@@ -19,6 +19,10 @@
 #include "sstpclient.h"
 #include "libsstp.h"
 
+#define PROGNAME "SSTPClient"
+#define VERSION  "0.1-alpha"
+#define CODENAME "Tartiflette"
+
 
 static sock_t init_tcp(char*, char*);
 static int init_tls_session();
@@ -93,13 +97,15 @@ void usage(char* name, int retcode)
   fd = (retcode == 0) ? stdout : stderr;
       
   fprintf(fd,
-	  "SSTPClient\n"
+	  "\n" PROGNAME "\n"
+	  "Version " VERSION "\n"
+	  "Release " CODENAME "\n"
 	  "--\n"
 	  "SSTP VPN client for Linux\n"
 	  "----------------------------------------------------------------------\n\n"
-	  "Usage:\n\t%s -s server -c ca_file -U username -P password [OPTIONS]\n"
+	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS]\n"
 	  "\nOPTIONS:\n"
-	  "\t-s, --server\tSSTP.Server.com (mandatory)\tSSTP Server URI\n"
+	  "\t-s, --server\tmy.sstp.server.com (mandatory)\tSSTP Server URI\n"
 	  "\t-c, --ca-file\t/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
 	  "\t-U, --username\tUSERNAME (mandatory)\t\tWindows username\n"
 	  "\t-P, --password\tPASSWORD (mandatory)\t\tWindows password\n"	  
@@ -243,7 +249,7 @@ static sock_t init_tcp(char* hostname, char* port)
   
   if (ll == NULL)
     {
-      xlog(LOG_INFO, "\t[KO]\nFailed to create connection.\n");
+      xlog(LOG_INFO, "\t\t[KO]\n");
       xlog(LOG_ERROR, "No valid socket\n");
       return -1;
     }
@@ -439,16 +445,25 @@ void sighandle(int signum)
 
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
-      
+
     case SIGINT:
-    case SIGTERM:
-      if (ctx!=NULL && ctx->pppd_pid < 0)
+    case SIGTERM:     /* INT or TERM will provoke a nice ending for the SSTP session */
+      
+      if (ctx != NULL && ctx->pppd_pid > 0)
 	{
+	  /* kill pppd */
 	  kill(ctx->pppd_pid, SIGINT);
 	  waitpid(ctx->pppd_pid, &status, 0);
 	}
       
-      xlog(LOG_INFO, "Signal received: Closing connection\n");
+      xlog(LOG_INFO, "Signal received: closing connection\n");
+
+      if (cfg->verbose)
+	xlog(LOG_INFO, "Sending SSTP_MSG_CALL_DISCONNECT message.\n");
+
+      /* close sstp connection, and disconnect */
+      send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT, NULL, 0, 0);
+      
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;      
     }
@@ -478,9 +493,11 @@ int main (int argc, char** argv, char** envp)
   if (getuid() != 0) 
     {
       xlog (LOG_ERROR, "pppd requires sstpclient to be executed with root privileges.\n");
-      return EXIT_FAILURE;
+      usage(argv[0], EXIT_FAILURE);
     }
-    
+
+  envp = NULL;
+  
   /* SIGTERM and SIGINT close the connection properly */
   /* set signal bitmask */
   sigemptyset(&sigset);
@@ -520,7 +537,7 @@ int main (int argc, char** argv, char** envp)
   sockfd = init_tcp(cfg->server, cfg->port); 
   if (sockfd < 0) 
     {
-      xlog(LOG_ERROR, "Failed to setup TCP socket, leaving\n");
+      xlog(LOG_ERROR, "TCP socket has failed, leaving...\n");
       free(cfg);
       return EXIT_FAILURE;
     }
@@ -530,7 +547,7 @@ int main (int argc, char** argv, char** envp)
   retcode = init_tls_session(sockfd, &tls); 
   if (retcode < 0)
     {
-      xlog(LOG_ERROR, "Failed to initialize TLS session, leaving.\n");
+      xlog(LOG_ERROR, "TLS session initialization has failed, leaving...\n");
       free(cfg);
       return EXIT_FAILURE;
     }
