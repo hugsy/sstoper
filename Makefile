@@ -37,11 +37,12 @@ valgrind: clean $(BIN)
         valgrind --leak-check=full ./$(BIN) $(ARGS)
 
 snapshot: clean
-	git add . && git ci -m "$(shell date): before snapshot"
-	git archive --format=tar --prefix=$(BIN) HEAD |gzip > /tmp/$(BIN)-latest.tgz 
+	git add . && git ci -m "$(shell date): Generating snapshot release"
+	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ HEAD |gzip > /tmp/$(BIN)-latest.tgz 
 
 release: clean
-	git archive --format=tar --prefix=$(BIN) master |gzip > /tmp/$(BIN)-$(VERSION).tgz
+	git add . && git ci -m "$(shell date): Generating stable release"
+	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ master |gzip > /tmp/$(BIN)-$(VERSION).tgz
 
 test:   $(BIN)
 	./$(BIN) $(ARGS)
