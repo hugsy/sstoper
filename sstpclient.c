@@ -19,10 +19,18 @@
 #include "sstpclient.h"
 #include "libsstp.h"
 
-#define PROGNAME "SSTPClient"
-#define VERSION  "0.1-alpha"
-#define CODENAME "Tartiflette"
 
+#ifndef PROGNAME
+#define PROGNAME "SSTPClient"
+#endif
+
+#ifndef VERSION
+#define VERSION  ""
+#endif
+
+#ifndef RELEASE
+#define RELEASE ""
+#endif
 
 static sock_t init_tcp(char*, char*);
 static int init_tls_session();
@@ -97,13 +105,11 @@ void usage(char* name, int retcode)
   fd = (retcode == 0) ? stdout : stderr;
       
   fprintf(fd,
-	  "\n" PROGNAME "\n"
-	  "Version " VERSION "\n"
-	  "Release " CODENAME "\n"
+	  "\n%s\nVersion: %.2f\nRelease: %s\n"
 	  "--\n"
 	  "SSTP VPN client for Linux\n"
 	  "----------------------------------------------------------------------\n\n"
-	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS]\n"
+	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
 	  "\t-s, --server\tmy.sstp.server.com (mandatory)\tSSTP Server URI\n"
 	  "\t-c, --ca-file\t/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
@@ -116,6 +122,7 @@ void usage(char* name, int retcode)
 	  "\t-d, --domain\tMyWindowsDomain\t\t\tSpecify Windows domain for authentication\n"	  
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
+	  PROGNAME, VERSION, RELEASE, 
 	  name);
   
   exit(retcode);

@@ -19,6 +19,15 @@
 #include <gnutls/x509.h>
 #include <gnutls/gnutls.h>
 
+#ifdef HAVE_PTY_H
+#include <pty.h>
+#else
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <libutil.h>
+#endif 
+
 #include "libsstp.h"
 #include "sstpclient.h"
 
@@ -1111,7 +1120,7 @@ int sstp_fork()
   int retcode, amaster, aslave, i;
   struct termios pty;
   char *pppd_path;
-  char *pppd_args[16];
+  char *pppd_args[32];
 
   
   pppd_path = cfg->pppd_path;
@@ -1122,6 +1131,7 @@ int sstp_fork()
   pppd_args[i++] = "local";
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "noauth";
   pppd_args[i++] = "user";
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";
@@ -1220,6 +1230,7 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
       break;
       
     case CERT_HASH_PROTOCOL_SHA256:
+    default:
       hmac = &EVP_sha256;
       hash_len = SHA256_HASH_LEN;      
       break;
