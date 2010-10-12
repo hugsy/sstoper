@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
-#include <pty.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
@@ -22,6 +21,7 @@
 #ifdef HAVE_PTY_H
 #include <pty.h>
 #else
+/* FreeBSD compat */
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -151,9 +151,10 @@ int https_session_negociation()
   rbytes = snprintf(buf, read_size,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
 		    "Host: %s\r\n" /* <-- note: le hostname jamais valide cote serveur */
-		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak aussi */
+		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak ici */
 		    "Content-Length: %llu\r\n"
 		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
+		    "SSTPVERSION: 1.0" /* <-- utilise pour les proxy */
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
@@ -1129,7 +1130,7 @@ int sstp_fork()
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
-  pppd_args[i++] = "sync";
+  pppd_args[i++] = "sync";    /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
   pppd_args[i++] = "noauth";
   pppd_args[i++] = "user";
@@ -1150,7 +1151,6 @@ int sstp_fork()
       pppd_args[i++] = cfg->domain;
     }
 
-  
   pppd_args[i++] = NULL;
 
   memset(&pty, 0, sizeof(struct termios));

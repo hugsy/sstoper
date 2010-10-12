@@ -1,8 +1,8 @@
 SSTPClient, Linux SSTP client
 
---
 
 What is SSTP ?
+--------------
 
 Wikipedia says:
 "Secure Socket Tunneling Protocol (SSTP) is a form of VPN tunnel that provides a
@@ -12,25 +12,38 @@ integrity checking. The use of SSL over TCP port 443 allows SSTP to pass through
 virtually all firewalls and proxy servers."
 http://en.wikipedia.org/wiki/Secure_Socket_Tunneling_Protocol
 
---
 
 What is SSTPClient ?
+--------------------
 
-A Linux client to establish VPN communication with SSTP server. Since SSTP is
-only a wrapper over PPP communication, pppd (http://ppp.samba.org/) MUST be
-installed. 
+A *nix implementation of the SSTP client, used to establish VPN communication
+with MS server (2008 and R2). Since SSTP is only a wrapper over PPP
+communication, pppd (http://ppp.samba.org/) MUST be installed. 
 
---
 
 Features:
+---------
+
+- Establishes IP VPN encapsulated inside SSL packets (so it should escape proxies)
 - IPv4 support (v6 to be tested)
 - HMAC-256 support (HMAC-160 to be tested)
-- provides a Wireshark SSTP dissector
+- Provides a Wireshark SSTP dissector to analyse SSTP behaviour
 - 
 
---
 
-Installing Wireshark SSTP:
+Pre-requisites:
+---------------
+
+- libcrypto library (for hmac.h)
+- lgnutls library (for gnutls.h and other)
+- libbsd library (for util.h)
+- pppd must be installed
+- root privileges
+
+
+
+Installing Wireshark SSTP dissector:
+------------------------------------
 
 * Download Wireshark source from http://www.wireshark.org and un-tar archive
 * Add "dissectors/packet-sstp.c" in DISSECTOR_SRC section inside
@@ -46,9 +59,9 @@ Installing Wireshark SSTP:
 * You now have a SSTP-compliant Wireshark version (a simple SSTP negociation
   PCAP file is provided in misc/ directory)
 
---
 
 Session example:
+----------------
 - first you need your server PEM-formatted CA file. It can usually be obtained
   like this:
   -> Go to http://<server>/certsrv
@@ -59,7 +72,7 @@ Session example:
 - un-tar and compile sstpclient
 {{{
 $ tar xf sstpclient.tar.gz
-$ ./configure && make
+$ make -f Makefile
 }}}
 
 - execute
@@ -78,7 +91,8 @@ Freeing regions.
 $ 
 }}}
 
---
 
 Comments/Bugs:
-Please send me back comments and bugs to <hugsy __AT__ pyc __DOT__ li>.
+--------------
+Please send me back comments and bugs to
+<christophe __DOT__ alladoum __AT__ hsc __DOT__ fr>

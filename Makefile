@@ -1,3 +1,8 @@
+################################################################################
+# Simple Makefile
+#
+#
+
 PROGNAME	=	\"SSTPClient\"
 AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.1
@@ -6,42 +11,47 @@ RELEASE		=	\"Tartiflette\"
 CC		=	gcc
 DBGFLAGS	=	-ggdb
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION) -D RELEASE=$(RELEASE)
-CFLAGS		=	-O2 -Wall $(DBGFLAGS) $(DEFINES)
+INC		= 	-I/usr/include
+LIB		= 	-L/usr/lib
+CFLAGS		=	-O2 -Wall $(DBGFLAGS) $(DEFINES) $(INC)
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
 BIN		=	sstpclient
 
-ARGS		=	-s vpn.coyote.looney -c ~/tmp/vpn.coyote.looney.crt -U test-sstp -P Hello1234
+ARGS		=	-s vpn.tweety.looney -c ~/tmp/vpn.tweety.looney.crt -U test-sstp -P Hello1234
 
+
+# OS specific compilation options
+ifeq ($(shell uname), FreeBSD)
+INC		+=	-I/usr/local/include
+LIB		+=	-I/usr/local/lib
+else
+DEFINES		+=	-D HAVE_PTY_H
+endif
+
+
+.PHONY : clean all valgrind release snapshot test
+
+.c.o :
+	$(CC) $(CFLAGS) -c -o $@ $< 
 
 all : $(BIN)
 
 $(BIN) : $(OBJECTS)
-ifeq ($(shell uname), "FreeBSD")
-	$(CC) $(CFLAGS) -D HAVE_PTY_H=0 -o $@ $* $(OBJECTS) $(LDFLAGS) 
-else
-	$(CC) $(CFLAGS) -D HAVE_PTY_H=1 -o $@ $* $(OBJECTS) $(LDFLAGS)
-endif
-
-.c.o :
-ifeq ($(shell uname), "FreeBSD")
-	$(CC) $(CFLAGS) -D HAVE_PTY_H=0 -c -o $@ $< 
-else
-	$(CC) $(CFLAGS) -D HAVE_PTY_H=1 -c -o $@ $<
-endif
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) 
 
 clean :
-	rm -fr $(OBJECTS) $(BIN)
+	rm -fr $(OBJECTS) $(BIN) *~ *swp \#*\#
 
 valgrind: clean $(BIN)
-        valgrind --leak-check=full ./$(BIN) $(ARGS)
+	valgrind --leak-check=full --show-reachable=yes ./$(BIN) $(ARGS)
 
 snapshot: clean
-	git add . && git ci -m "$(shell date): Generating snapshot release"
+	git add . && git ci -m "$(shell date): Generating snapshot release" && \
 	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ HEAD |gzip > /tmp/$(BIN)-latest.tgz 
 
 release: clean
-	git add . && git ci -m "$(shell date): Generating stable release"
+	git add . && git ci -m "$(shell date): Generating stable release" && \
 	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ master |gzip > /tmp/$(BIN)-$(VERSION).tgz
 
 test:   $(BIN)

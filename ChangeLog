@@ -1,0 +1,8 @@
+2010-10-12 first release <chris@hades.olympe>
+
+	* implementation supports hmac256 (hmac-160 been implemented)
+	* freebsd support added
+	* ipv4 only implemented (ipv6 been implemented)
+	* todo : - add proxy support
+		 - add certificate verification
+		 - implement macos support
