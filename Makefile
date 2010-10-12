@@ -37,7 +37,7 @@ valgrind: clean $(BIN)
         valgrind --leak-check=full ./$(BIN) $(ARGS)
 
 snapshot: clean
-	git add . && git ci -m $(shell date %+F)": before snapshot"
+	git add . && git ci -m "$(shell date): before snapshot"
 	git archive --format=tar --prefix=$(BIN) HEAD |gzip > /tmp/$(BIN)-latest.tgz 
 
 release: clean
