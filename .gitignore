@@ -1,16 +1,3 @@
 *.o
 sstpclient
-aclocal.m4
-configure
-config.*
-install-sh
-missing
-Makefile.in
-Makefile
-misc/ssl_debug
-config.h
-autom4te.cache
-autom4te.cache/*
-*stamp-h1*
-*.dirstamp*
-src/Makefile
+

@@ -19,9 +19,16 @@
 #include "sstpclient.h"
 #include "libsstp.h"
 
+
+#ifndef PROGNAME
 #define PROGNAME "SSTPClient"
-#define VERSION  "0.1-alpha"
-#define CODENAME "Tartiflette"
+#endif
+#ifndef VERSION
+#define VERSION  "unk"
+#endif
+#ifndef RELEASE
+#define RELEASE "unk"
+#endif
 
 
 static sock_t init_tcp(char*, char*);
@@ -97,13 +104,11 @@ void usage(char* name, int retcode)
   fd = (retcode == 0) ? stdout : stderr;
       
   fprintf(fd,
-	  "\n" PROGNAME "\n"
-	  "Version " VERSION "\n"
-	  "Release " CODENAME "\n"
+	  "\n%s\nVersion: %.2f\nRelease: %s\n"
 	  "--\n"
 	  "SSTP VPN client for Linux\n"
 	  "----------------------------------------------------------------------\n\n"
-	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS]\n"
+	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
 	  "\t-s, --server\tmy.sstp.server.com (mandatory)\tSSTP Server URI\n"
 	  "\t-c, --ca-file\t/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
@@ -116,6 +121,7 @@ void usage(char* name, int retcode)
 	  "\t-d, --domain\tMyWindowsDomain\t\t\tSpecify Windows domain for authentication\n"	  
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
+	  PROGNAME, VERSION, RELEASE, 
 	  name);
   
   exit(retcode);
@@ -441,7 +447,7 @@ void sighandle(int signum)
 
     case SIGCHLD:
       waitpid(ctx->pppd_pid, &status, WNOHANG);     
-      xlog(LOG_INFO, "Process pppd (%d) has died with retcode %d\n", ctx->pppd_pid, status);
+      xlog(LOG_INFO, "pppd (PID:%d) died with retcode %d\n", ctx->pppd_pid, status);
 
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
@@ -452,6 +458,11 @@ void sighandle(int signum)
       if (ctx != NULL && ctx->pppd_pid > 0)
 	{
 	  /* kill pppd */
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "Waiting for pppd process to end.\n");
+	  if (cfg->verbose > 2)
+	    xlog(LOG_DEBUG, "Sending SIGINT to pppd process (PID:%d)\n", ctx->pppd_pid);
+	  
 	  kill(ctx->pppd_pid, SIGINT);
 	  waitpid(ctx->pppd_pid, &status, 0);
 	}
@@ -498,6 +509,28 @@ int main (int argc, char** argv, char** envp)
 
   envp = NULL;
   
+  /* configuration parsing and privilege check */
+  cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
+    
+  parse_options(cfg, argc, argv);
+  
+  check_required_arg(cfg->server);
+  check_required_arg(cfg->ca_file);
+  check_required_arg(cfg->username);
+  check_required_arg(cfg->password);
+
+  check_default_arg(&cfg->port, "443");
+  check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
+
+  retcode = access (cfg->pppd_path, X_OK);
+  if (retcode < 0)
+    {
+      xlog(LOG_ERROR, "Failed to access pppd.\n");
+      if (cfg->verbose)
+	xlog(LOG_ERROR, "%s", strerror(retcode));
+      return EXIT_FAILURE;
+    }
+
   /* SIGTERM and SIGINT close the connection properly */
   /* set signal bitmask */
   sigemptyset(&sigset);
@@ -518,19 +551,6 @@ int main (int argc, char** argv, char** envp)
   sigaction(SIGTERM, &saction, NULL);
   sigaction(SIGALRM, &saction, NULL);
   sigaction(SIGCHLD, &saction, NULL);
-
-  /* configuration parsing and privilege check */
-  cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
-    
-  parse_options(cfg, argc, argv);
-  
-  check_required_arg(cfg->server);
-  check_required_arg(cfg->ca_file);
-  check_required_arg(cfg->username);
-  check_required_arg(cfg->password);
-
-  check_default_arg(&cfg->port, "443");
-  check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
 
   
   /* create socket  */
@@ -573,7 +593,6 @@ int main (int argc, char** argv, char** envp)
   
   sstp_loop();
 
-  
   /* end gnutls session */ 
   if (cfg->verbose)
     xlog(LOG_INFO, "SSTP dialog ends successfully\n");
