@@ -106,7 +106,7 @@ void usage(char* name, int retcode)
   fprintf(fd,
 	  "\n%s\nVersion: %.2f\nRelease: %s\n"
 	  "--\n"
-	  "SSTP VPN client for Linux\n"
+	  "SSTP VPN client for *nix\n"
 	  "----------------------------------------------------------------------\n\n"
 	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
@@ -234,7 +234,7 @@ static sock_t init_tcp(char* hostname, char* port)
   
   if (getaddrinfo(hostname, port, &hostinfo, &res) == -1)
     {
-      perror("getaddrinfo");
+      xlog(LOG_ERROR, "getaddrinfo failed.\n");
       return -1;
     }
   
@@ -245,18 +245,26 @@ static sock_t init_tcp(char* hostname, char* port)
 		    ll->ai_protocol);
     
       if (sock == -1)
-	continue;
+	{
+	  if (cfg->verbose > 2)
+	    xlog(LOG_DEBUG, "Failed to create socket: %s\n", strerror(errno));
+
+	  continue;
+	}
+	
     
       if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
 	break;
-    
+
+      if (cfg->verbose > 2)
+	xlog(LOG_DEBUG, "Failed to establish connection: %s\n", strerror(errno));
+      
       close(sock);
     }
   
   if (ll == NULL)
     {
-      xlog(LOG_INFO, "\t\t[KO]\n");
-      xlog(LOG_ERROR, "No valid socket\n");
+      xlog(LOG_ERROR, "\t\t[KO]\n");
       return -1;
     }
 
@@ -500,6 +508,12 @@ int main (int argc, char** argv, char** envp)
   struct sigaction saction;
   int retcode;
 
+#if !defined  __Linux__ && !defined __FreeBSD__ \
+  && !defined __OpenBSD__ && !defined __Darwin__
+  xlog (LOG_ERROR, "Operating system not supported");
+  return EXIT_FAILURE;
+#endif
+  
   /* check user identifier */
   if (getuid() != 0) 
     {

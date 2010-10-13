@@ -51,8 +51,9 @@ sstp_config *cfg;
 
 
 /* compat ansi */
+#if !defined __Darwin__
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
-
+#endif
 
 /* functions declaration */
 void xlog(int type, const char* fmt, ...); 

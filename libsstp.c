@@ -18,27 +18,31 @@
 #include <gnutls/x509.h>
 #include <gnutls/gnutls.h>
 
-#ifdef HAVE_PTY_H
+#if defined __Linux__
 #include <pty.h>
-#else
+
+#elif defined __FreeBSD__
 /* FreeBSD compat */
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <libutil.h>
+
+#elif defined __OpenBSD__
+/* OpenBSD compat */
+#include <termios.h>
+#include <util.h>
+
+#elif defined __Darwin__
+/*  Darwin compat */
+#include <util.h>
+
 #endif 
 
 #include "libsstp.h"
 #include "sstpclient.h"
 
-#ifdef HAVE_PTY_H
-#include <pty.h>
-#else
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <libutil.h>
-#endif
+
 
 /**
  * Generate an GUID identifier for the SSTP connection
@@ -162,7 +166,7 @@ int https_session_negociation()
 		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak ici */
 		    "Content-Length: %llu\r\n"
 		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
-		    "SSTPVERSION: 1.0" /* <-- utilise pour les proxy */
+		    /*"SSTPVERSION: 1.0"  <-- utilise pour les proxy, fail si envoye direct */
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
