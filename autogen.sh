@@ -4,4 +4,4 @@
 #
 
 touch NEWS README AUTHORS ChangeLog LICENSE
-autoreconf --force --install
+autoreconf --force --install -W gnu

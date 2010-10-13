@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
-#include <pty.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
@@ -22,6 +21,14 @@
 #include "libsstp.h"
 #include "sstpclient.h"
 
+#ifdef HAVE_PTY_H
+#include <pty.h>
+#else
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <libutil.h>
+#endif
 
 /**
  * Generate an GUID identifier for the SSTP connection
