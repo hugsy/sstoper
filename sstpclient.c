@@ -21,7 +21,7 @@
 
 
 #ifndef PROGNAME
-#define PROGNAME "SSTPClient"
+#define PROGNAME "SSToPer"
 #endif
 #ifndef VERSION
 #define VERSION  "unk"
@@ -35,6 +35,7 @@ static sock_t init_tcp(char*, char*);
 static int init_tls_session();
 static int check_tls_session();
 static void end_tls_session(int);
+char *getpass( const char *prompt);
 
 /**
  * Logging function, displays log message to stderr.
@@ -108,17 +109,19 @@ void usage(char* name, int retcode)
 	  "--\n"
 	  "SSTP VPN client for *nix\n"
 	  "----------------------------------------------------------------------\n\n"
-	  "Usage (as root):\n\t%s -s server -c ca_file -U username -P password [OPTIONS+]\n"
+	  "Usage (as root):\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
-	  "\t-s, --server\tmy.sstp.server.com (mandatory)\tSSTP Server URI\n"
-	  "\t-c, --ca-file\t/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
-	  "\t-U, --username\tUSERNAME (mandatory)\t\tWindows username\n"
-	  "\t-P, --password\tPASSWORD (mandatory)\t\tWindows password\n"	  
-	  "\t-p, --port NUM\t\t\t\t\tAlternative server port (default: 443)\n"
-	  "\t-x, --pppd-path\t/path/to/pppd\t\t\tSpecifies path to pppd executable (default: /usr/sbin/pppd)\n"
-	  "\t-v, --verbose\t\t\t\t\tIncrease verbose mode\n"
-	  "\t-l, --logfile\t/path/to/pppd_logfile\t\tLog pppd activity in specified file\n"
-	  "\t-d, --domain\tMyWindowsDomain\t\t\tSpecify Windows domain for authentication\n"	  
+	  "\t-s, --server=my.sstp.server.com (mandatory)\tSSTP Server URI\n"
+	  "\t-c, --ca-file=/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
+	  "\t-U, --username=USERNAME (mandatory)\t\tWindows username\n"
+	  "\t-P, --password=PASSWORD\t\t\t\tWindows password\n"	  
+	  "\t-p, --port=NUM\t\t\t\t\tAlternative server port\n"
+	  "\t-x, --pppd-path=/path/to/pppd\t\t\tSpecifies path to pppd executable\n"
+	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd activity in specified file\n"
+	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain for authentication\n"
+	  "\t-m, --proxy=PROXY\t\t\t\tSpecify proxy location\n"
+	  "\t-n, --proxy-port=PORT\t\t\t\tSpecify proxy port\n"
+	  "\t-v, --verbose\t\t\t\t\tIncrease verbose mode (accept multiple)\n"	  
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  PROGNAME, VERSION, RELEASE, 
@@ -224,6 +227,7 @@ static sock_t init_tcp(char* hostname, char* port)
   sock_t sock;
   struct addrinfo hostinfo, *res, *ll;
 
+  memset(&hostinfo, 0, sizeof(struct addrinfo));
   hostinfo.ai_family = AF_UNSPEC;
   hostinfo.ai_socktype = SOCK_STREAM;
   hostinfo.ai_flags = 0;
@@ -238,7 +242,7 @@ static sock_t init_tcp(char* hostname, char* port)
       return -1;
     }
   
-  for (ll = res; ll != NULL; ll = ll->ai_next)
+  for (ll = res; ll ; ll = ll->ai_next)
     {
       sock = socket(ll->ai_family,
 		    ll->ai_socktype,
@@ -264,7 +268,7 @@ static sock_t init_tcp(char* hostname, char* port)
   
   if (ll == NULL)
     {
-      xlog(LOG_ERROR, "\t\t[KO]\n");
+      xlog(LOG_INFO, "\t\t[KO]\n");
       return -1;
     }
 
@@ -531,8 +535,15 @@ int main (int argc, char** argv, char** envp)
   check_required_arg(cfg->server);
   check_required_arg(cfg->ca_file);
   check_required_arg(cfg->username);
-  check_required_arg(cfg->password);
 
+  if (cfg->password == NULL)
+    {
+      if (cfg->verbose)
+	xlog(LOG_INFO, "No password specified, prompting for one.\n");
+      
+      cfg->password = getpass("Password: ");
+    }
+  
   check_default_arg(&cfg->port, "443");
   check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
 

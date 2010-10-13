@@ -1124,7 +1124,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
  * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
  * Alain Thivillon & Herve Schauer Consultants (c)
  *
- * @desc fork and execute pppd daemon
+ * Fork and execute pppd daemon
  * @return child pid if process is the father or error otherwise (execv pppd)
  **/
 int sstp_fork() 
@@ -1140,15 +1140,25 @@ int sstp_fork()
   
   i = 0;
   pppd_args[i++] = "pppd"; 
+  
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
-  pppd_args[i++] = "sync";    /* <-- Thanks to Nicolas Collignon */
-  pppd_args[i++] = "refuse-eap";
   pppd_args[i++] = "noauth";
-  pppd_args[i++] = "user";
+  pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
+
+#if defined __Linux__  
   pppd_args[i++] = "password";
   pppd_args[i++] = cfg->password;
+  pppd_args[i++] = "sync";    /* <-- Thanks to Nicolas Collignon */
+  pppd_args[i++] = "refuse-eap";
+  
+#elif defined __FreeBSD__
+  pppd_args[i++] = "asyncmap";
+  pppd_args[i++] = "0x0";
+  pppd_args[i++] = "login";
+  
+#endif
 
   if (cfg->logfile != NULL) 
     {
