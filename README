@@ -1,4 +1,4 @@
-SSTPClient, Linux SSTP client
+SSToPer, *nix SSTP client
 
 
 What is SSTP ?
@@ -13,12 +13,13 @@ virtually all firewalls and proxy servers."
 http://en.wikipedia.org/wiki/Secure_Socket_Tunneling_Protocol
 
 
-What is SSTPClient ?
+What is SSToPer ?
 --------------------
 
 A *nix implementation of the SSTP client, used to establish VPN communication
 with MS server (2008 and R2). Since SSTP is only a wrapper over PPP
-communication, pppd (http://ppp.samba.org/) MUST be installed. 
+communication, pppd (http://ppp.samba.org/) MUST be installed with the synchronous
+HDLC serial encoding capability enabled.
 
 
 Features:
@@ -37,7 +38,7 @@ Pre-requisites:
 - libcrypto library (for hmac.h)
 - lgnutls library (for gnutls.h and other)
 - libbsd library (for util.h)
-- pppd must be installed
+- HDLC-sync capable pppd must be installed
 - root privileges
 
 
@@ -46,18 +47,18 @@ Installing Wireshark SSTP dissector:
 ------------------------------------
 
 * Download Wireshark source from http://www.wireshark.org and un-tar archive
-* Add "dissectors/packet-sstp.c" in DISSECTOR_SRC section inside
-  `epan/CMakeLists.txt` file
-* Add "packet-sstp.c" in DISSECTOR_SRC section inside
-  `epan/dissectors/Makefile.common` file
-* In wireshark/ directory, execute :
+* Add "dissectors/packet-sstp.c" in DISSECTOR_SRC section inside `epan/CMakeLists.txt` file
+* Add "packet-sstp.c" in DISSECTOR_SRC section inside `epan/dissectors/Makefile.common` file
+* Copy sstoper/misc/packet-sstp.c -> wireshark/epan/dissectors/
+* In wireshark/ root directory, execute :
 {{{
-   $ ./autogen.sh
-   $ ./configure --with-ssl
-   $ make
+   $ ./autogen.sh && ./configure --with-ssl && make
 }}}
 * You now have a SSTP-compliant Wireshark version (a simple SSTP negociation
-  PCAP file is provided in misc/ directory)
+  PCAP file is provided in misc/ directory) which can be started
+{{{
+   $ sudo ./wireshark  
+}}}
 
 
 Session example:
@@ -69,15 +70,15 @@ Session example:
      -> Select "Base64" as "Encoding method" option
      -> Click on "Download CA certificate" link
 
-- un-tar and compile sstpclient
+- un-tar and compile sstoper
 {{{
-$ tar xf sstpclient.tar.gz
-$ make -f Makefile
+$ tar xf sstoper.tar.gz
+$ cd sstoper && make -f Makefile # or just make
 }}}
 
 - execute
 {{{
-$ sudo ./sstpclient -s server -c server.crt -U user -P pass
+$ sudo ./sstoper -s server -c server.crt -U user -P pass
 [!] Using default value: 443.
 [!] Using default value: /usr/sbin/pppd.
 Connecting to vpn.tweety.looney:443     [OK]
@@ -92,7 +93,17 @@ $
 }}}
 
 
+Supported systems:
+------------------
+Stable :
+   * Linux (tested on Fedora 13 x86_64 and Debian Lenny i686)
+   * Darwin (Mac OS X - Snow Leopard)
+
+Unstable :
+   * FreeBSD (tested on 7.3, 8.1 - i386)
+   * OpenBSD (tested on 4.7 - i386)
+
+   
 Comments/Bugs:
 --------------
-Please send me back comments and bugs to
-<christophe __DOT__ alladoum __AT__ hsc __DOT__ fr>
+Please send me back comments and bugs to <ca __AT__ hsc __DOT__ fr>

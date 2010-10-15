@@ -349,7 +349,7 @@ static int init_tls_session()
   retcode = gnutls_handshake (tls);
   if (retcode != GNUTLS_E_SUCCESS)
     {
-      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake\n%s",
+      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake: %s\n",
 	   gnutls_strerror(retcode));
       end_tls_session(retcode);
       return -1;
@@ -359,7 +359,7 @@ static int init_tls_session()
   retcode = check_tls_session();
   if (retcode < 0 )
     {
-      xlog(LOG_ERROR, "init_tls_session: fail to check tls server certificate\n%s",
+      xlog(LOG_ERROR, "init_tls_session: fail to check tls server certificate:%s\n",
 	   gnutls_strerror(retcode));
       return -1;
     }
@@ -475,17 +475,21 @@ void sighandle(int signum)
 	  if (cfg->verbose > 2)
 	    xlog(LOG_DEBUG, "Sending SIGINT to pppd process (PID:%d)\n", ctx->pppd_pid);
 	  
-	  kill(ctx->pppd_pid, SIGINT);
-	  waitpid(ctx->pppd_pid, &status, 0);
+	  kill(ctx->pppd_pid, SIGKILL);
+	  waitpid(ctx->pppd_pid, &status, WNOHANG);
 	}
       
       xlog(LOG_INFO, "Signal received: closing connection\n");
 
-      if (cfg->verbose)
-	xlog(LOG_INFO, "Sending SSTP_MSG_CALL_DISCONNECT message.\n");
+      if (ctx->state == CLIENT_CALL_CONNECTED) 
+	{
+	  
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "Sending SSTP_MSG_CALL_DISCONNECT message.\n");
 
-      /* close sstp connection, and disconnect */
-      send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT, NULL, 0, 0);
+	  /* close sstp connection, and disconnect */
+	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT, NULL, 0, 0);
+      }
       
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;      
@@ -545,14 +549,19 @@ int main (int argc, char** argv, char** envp)
     }
   
   check_default_arg(&cfg->port, "443");
-  check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
 
+#if defined __Linux__ || defined __Darwin__
+  check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
+#elif defined __FreeBSD__ || defined __OpenBSD__
+  check_default_arg(&cfg->pppd_path, "/usr/sbin/ppp");
+#endif
+  
   retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
-      xlog(LOG_ERROR, "Failed to access pppd.\n");
+      xlog(LOG_ERROR, "Failed to access ppp.\n");
       if (cfg->verbose)
-	xlog(LOG_ERROR, "%s", strerror(retcode));
+	xlog(LOG_ERROR, "%s\n", strerror(retcode));
       return EXIT_FAILURE;
     }
 

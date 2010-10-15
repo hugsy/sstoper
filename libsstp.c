@@ -18,6 +18,10 @@
 #include <gnutls/x509.h>
 #include <gnutls/gnutls.h>
 
+#include "libsstp.h"
+#include "sstpclient.h"
+
+
 #if defined __Linux__
 #include <pty.h>
 
@@ -38,9 +42,6 @@
 #include <util.h>
 
 #endif 
-
-#include "libsstp.h"
-#include "sstpclient.h"
 
 
 
@@ -278,8 +279,10 @@ void sstp_loop()
   while(ctx->state != CLIENT_CALL_DISCONNECTED)
     {
       FD_ZERO(&msrd);
+      
       if (ctx->pppd_pid > 0)
 	FD_SET(0, &msrd);
+      
       FD_SET(sockfd, &msrd);   
 
       retcode = select(sockfd + 1, &msrd, NULL, NULL, NULL);
@@ -287,7 +290,7 @@ void sstp_loop()
       if ( retcode == -1 )
 	{
 	  xlog(LOG_ERROR, "sstp_loop: select failed: %s\n", strerror(errno));
-	  ctx->state = CLIENT_CALL_DISCONNECTED;
+	  set_client_status(CLIENT_CALL_DISCONNECTED);
 	  break;
 	}
 
@@ -420,7 +423,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  
 	  ctx->pppd_pid = retcode;
 	  if (cfg->verbose)
-	    xlog (LOG_INFO, "pppd forked as %d\n", ctx->pppd_pid);
+	    xlog (LOG_INFO, "%s forked as %d\n", cfg->pppd_path, ctx->pppd_pid);
 
 	  break;
 	    
@@ -1068,7 +1071,8 @@ int crypto_set_cmac()
 	}
             
       xlog(LOG_INFO, "\t\t--> CMac\t0x");
-      for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmac[i]));
+      for(i=0; i<8; i++)
+	xlog(LOG_INFO, "%.8x", ntohl(ctx->cmac[i]));
       xlog(LOG_INFO, "\n");
       
     }
@@ -1080,6 +1084,12 @@ int crypto_set_cmac()
 }
 
 
+/**
+ * Print attribute information.
+ * 
+ * @param data
+ * @param attr_len
+ */
 int attribute_status_info(void* data, uint16_t attr_len)
 {
   sstp_attribute_status_info_t* info;
@@ -1098,11 +1108,15 @@ int attribute_status_info(void* data, uint16_t attr_len)
       return -1;
     }
 
-  /* show attribute */
-  xlog(LOG_INFO, "\t\t--> attr_ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
-  xlog(LOG_INFO, "\t\t--> status\t%s (%#.2x)\n", attrib_status_str[status], status);
-
-  if (ctx->state != CLIENT_CONNECT_REQUEST_SENT) return 0;
+  if (cfg->verbose)
+    {  
+      /* show attribute */
+      xlog(LOG_INFO, "\t\t--> attr ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
+      xlog(LOG_INFO, "\t\t--> status\t%s (%#.2x)\n", attrib_status_str[status], status);
+    }
+  
+  if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
+    return 0;
   
   /* attrib_value is at most 64 bytes (ie full attr len <= 64 + 12 bytes)*/
   rbytes = sizeof(sstp_attribute_header_t) + 2*sizeof(uint32_t);
@@ -1135,31 +1149,29 @@ int sstp_fork()
   char *pppd_path;
   char *pppd_args[32];
 
-  
-  pppd_path = cfg->pppd_path;
-  
+  pppd_path = cfg->pppd_path;  
   i = 0;
+
+#if defined __Linux__ || defined __Darwin__
   pppd_args[i++] = "pppd"; 
-  
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
-
-#if defined __Linux__  
   pppd_args[i++] = "password";
   pppd_args[i++] = cfg->password;
-  pppd_args[i++] = "sync";    /* <-- Thanks to Nicolas Collignon */
+  pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
   
-#elif defined __FreeBSD__
-  pppd_args[i++] = "asyncmap";
-  pppd_args[i++] = "0x0";
-  pppd_args[i++] = "login";
+#elif defined __FreeBSD__ || defined __OpenBSD__
+  pppd_args[i++] = "ppp"; 
+  pppd_args[i++] = "-background";
+  pppd_args[i++] = "tweety";
   
 #endif
 
+  
   if (cfg->logfile != NULL) 
     {
       pppd_args[i++] = "logfile";
@@ -1187,7 +1199,6 @@ int sstp_fork()
       return -1;
     }
 
-  
   ppp_pid = fork();
   
   if (ppp_pid > 0)
@@ -1213,14 +1224,14 @@ int sstp_fork()
      
       if (execv (pppd_path, pppd_args) == -1)
 	{
-	  xlog (LOG_ERROR, "execv failed: %s", strerror(errno));
+	  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
 	  return -1;
 	}
     }
 
   else 
     {
-      xlog (LOG_ERROR, "sstp_fork: %s", strerror(errno));
+      xlog (LOG_ERROR, "sstp_fork: %s\n", strerror(errno));
       return -1;
     }
 
