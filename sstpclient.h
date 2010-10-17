@@ -28,6 +28,7 @@ enum
   {
     LOG_DEBUG = 0,
     LOG_INFO,
+    LOG_WARNING,
     LOG_ERROR,
   };
 
@@ -39,6 +40,7 @@ typedef struct
   char* ca_file;
   char* username;
   char* password;
+  int free_pwd;
   char* logfile;
   char* pppd_path;
   char* domain;
@@ -48,6 +50,7 @@ typedef struct
 
 gnutls_session_t tls;
 gnutls_x509_crt_t certificate;
+gnutls_certificate_credentials_t creds;
 sock_t sockfd;
 sstp_config *cfg;
 
@@ -62,4 +65,4 @@ sock_t init_tcp();
 int init_tls_session();
 int check_tls_session();
 void end_tls_session(int);
-char *getpass( const char *prompt);
+char *getpass( const char*);

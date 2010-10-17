@@ -207,9 +207,8 @@ int https_session_negociation()
 }
 
 /**
- * Emits SSTP negociation request, ie Control message with
- * ENCAPSULATED_PROTOCOL_ID attribute. Negociation timer is set up and state
- * is changed.
+ * Emits SSTP negociation request, ie Control message with ENCAPSULATED_PROTOCOL_ID
+ * attribute. Negociation timer is set up and state is changed.
  */
 void sstp_init()
 {
@@ -287,9 +286,10 @@ void sstp_loop()
 	{
 	  /* read from 0 and sstp_send to dest */
 	  char rbuffer[read_max_size];
-	  ssize_t rbytes;
+	  ssize_t rbytes = -1;
 	  rbytes = read(0, rbuffer, read_max_size);
-	  send_sstp_data_packet(rbuffer, rbytes);
+	  if (rbytes > 0)
+	    send_sstp_data_packet(rbuffer, rbytes);
 	}
       
       if (FD_ISSET(sockfd, &rcv_fd)) 
@@ -366,7 +366,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
   sstp_header = (sstp_header_t*) rbuffer;
   if (!is_valid_header(sstp_header, sstp_length))
     {
-      xlog(LOG_ERROR, "SSTP packet has invalid header. Dropped\n");
+      xlog(LOG_WARNING, "SSTP packet has invalid header. Dropped\n");
       return 0;
     } 
 

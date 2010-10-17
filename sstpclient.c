@@ -48,8 +48,12 @@ void xlog(int type, const char* fmt, ...)
       fprintf(stderr, "[*] ");
       break;
     case LOG_ERROR:
+      fprintf(stderr, "[-] ");
+      break;
+    case LOG_WARNING:
       fprintf(stderr, "[!] ");
       break;
+
     case LOG_INFO:
     default :
       break;
@@ -87,6 +91,21 @@ void* xmalloc(size_t size)
     
   memset(ptr, 0, size);
   return ptr;
+}
+
+
+/**
+ * Free configuration blokcs
+ */
+void xfree_cfg() 
+{
+  if (cfg->free_pwd)
+    {
+      free(cfg->password);
+      cfg->free_pwd = 0;
+    }
+
+  free(cfg);
 }
 
 
@@ -129,6 +148,7 @@ void usage(char* name, int retcode)
 
 /**
  * Parse options
+ *
  */
 void parse_options (sstp_config* cfg, int argc, char** argv)
 {
@@ -194,7 +214,7 @@ void check_required_arg(char* argument)
   if (argument == NULL)
     {
       xlog(LOG_ERROR, "Missing required argument.\n\n");
-      usage("sstpclient", EXIT_FAILURE);
+      usage(PROGNAME, EXIT_FAILURE);
     }
 }
 
@@ -209,7 +229,7 @@ void check_default_arg(char** argument, char* default_value)
 {
   if ((*argument) == NULL)
     {
-      xlog(LOG_ERROR, "Using default value: %s\n", default_value);
+      xlog(LOG_WARNING, "Using default value: %s\n", default_value);
       *argument = default_value;
     }
 }
@@ -247,9 +267,13 @@ sock_t init_tcp()
       port = cfg->port;
     }
   
-  if (getaddrinfo(host, port, &hostinfo, &res) == -1)
+  if (getaddrinfo(host, port, &hostinfo, &res) < 0)
     {
-      xlog(LOG_ERROR, "getaddrinfo failed.\n");
+      xlog(LOG_INFO, "\t\t[KO]\n");
+      if (cfg->verbose > 2)
+	xlog(LOG_DEBUG, "%s\n", strerror(errno));
+      
+      freeaddrinfo(res);
       return -1;
     }
   
@@ -260,19 +284,10 @@ sock_t init_tcp()
 		    ll->ai_protocol);
     
       if (sock == -1)
-	{
-	  if (cfg->verbose > 2)
-	    xlog(LOG_DEBUG, "Failed to create socket: %s\n", strerror(errno));
-
-	  continue;
-	}
-	
+	continue;
     
       if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
 	break;
-
-      if (cfg->verbose > 2)
-	xlog(LOG_DEBUG, "Failed to establish connection: %s\n", strerror(errno));
       
       close(sock);
     }
@@ -280,6 +295,10 @@ sock_t init_tcp()
   if (ll == NULL)
     {
       xlog(LOG_INFO, "\t\t[KO]\n");
+      if (errno && cfg->verbose > 2)
+	xlog(LOG_DEBUG, "%s\n", strerror(errno));
+      
+      freeaddrinfo(res);
       return -1;
     }
 
@@ -309,7 +328,7 @@ int proxy_connect(int sockfd)
 		 "CONNECT %s:%s HTTP/1.0\r\n"
 		 "SSTPVERSION: 1.0\r\n"
 		 "User-Agent: %s-%.2f\r\n\r\n",
-		 cfg->proxy, cfg->proxy_port,
+		 cfg->server, cfg->port,
 		 PROGNAME, VERSION);
 
   if (cfg->verbose > 2)
@@ -348,10 +367,18 @@ int init_tls_session()
 {
   int retcode;
   const char* err;
-  gnutls_certificate_credentials_t creds;
 
+  if ( gnutls_check_version("2.8.6") == NULL)
+    {
+      if (gnutls_check_version("2.8.0") == NULL)
+	{
+	  xlog(LOG_ERROR, "Unsupported GnuTLS version\n");
+	  return -1;
+	}
+
+      xlog(LOG_WARNING, "Old version of GnuTLS, some features might not work\n");
+    } 
   
-  /* initialize and allocate */
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
 
@@ -362,7 +389,6 @@ int init_tls_session()
       return -1;
     }
   
-  /* setup x509 */
   retcode = gnutls_priority_set_direct (tls, "SECURE256", &err);  
   if (retcode != GNUTLS_E_SUCCESS)
     {
@@ -379,16 +405,14 @@ int init_tls_session()
       return -1;
     }
 
-  /* setting trusted ca list */
   retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
-      xlog(LOG_ERROR, "gnutls_certificate_set_x509_trust_file: no valid certificate.\n%s",
+      xlog(LOG_ERROR, "gnutls_certificate_set_x509_trust_file: no valid certificate.\n%s\n",
 	   gnutls_strerror(retcode));
       return -1;
     }
 
-  /* applying settings to session and free credentials */
   retcode = gnutls_credentials_set (tls, GNUTLS_CRD_CERTIFICATE, &creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
@@ -396,13 +420,10 @@ int init_tls_session()
 	   gnutls_strerror(retcode));
       return -1;
     }
-
-  gnutls_certificate_free_credentials(creds);
   
-  /* bind gnutls session with the socket */
   gnutls_transport_set_ptr (tls, (gnutls_transport_ptr_t) sockfd);
 
-  /* proceed with handshake */
+  /* all ok, proceed with handshake */
   retcode = gnutls_handshake (tls);
   if (retcode != GNUTLS_E_SUCCESS)
     {
@@ -441,8 +462,9 @@ void end_tls_session(int reason)
   if (retcode < -1)
     xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
 
-  gnutls_x509_crt_deinit (certificate);
   gnutls_deinit(tls);
+  gnutls_x509_crt_deinit (certificate);
+  gnutls_certificate_free_credentials(creds);
   gnutls_global_deinit();
 
   if (cfg->verbose)
@@ -554,6 +576,7 @@ int main (int argc, char** argv, char** envp)
   sigset_t sigset;
   struct sigaction saction;
   int retcode;
+  
 
 #if !defined  ___Linux___ && !defined ___FreeBSD___ \
   && !defined ___OpenBSD___ && !defined ___Darwin___
@@ -580,12 +603,14 @@ int main (int argc, char** argv, char** envp)
   check_required_arg(cfg->ca_file);
   check_required_arg(cfg->username);
 
+  cfg->free_pwd = FALSE;
   if (cfg->password == NULL)
     {
       if (cfg->verbose)
 	xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
       cfg->password = getpass("Password: ");
+      cfg->free_pwd = TRUE;
     }
   
   check_default_arg(&cfg->port, "443");
@@ -633,7 +658,7 @@ int main (int argc, char** argv, char** envp)
   if (sockfd < 0) 
     {
       xlog(LOG_ERROR, "TCP socket has failed, leaving...\n");
-      free(cfg);
+      xfree_cfg();
       return EXIT_FAILURE;
     }
 
@@ -643,8 +668,7 @@ int main (int argc, char** argv, char** envp)
   
       if (retcode < 0)
 	{
-	  xlog(LOG_ERROR, "Failed to establish proxy connection\n");
-	  free(cfg);
+	  xfree_cfg();
 	  return EXIT_FAILURE;
 	}
     }
@@ -653,7 +677,7 @@ int main (int argc, char** argv, char** envp)
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "TLS session initialization has failed, leaving...\n");
-      free(cfg);
+      xfree_cfg();
       return EXIT_FAILURE;
     }
 
@@ -666,7 +690,7 @@ int main (int argc, char** argv, char** envp)
     {
       xlog(LOG_ERROR, "An error occured in HTTPS negocation, leaving\n");
       end_tls_session(EXIT_FAILURE);
-      free(cfg);
+      xfree_cfg();
       return EXIT_FAILURE;
     }
     
@@ -680,8 +704,6 @@ int main (int argc, char** argv, char** envp)
     xlog(LOG_INFO, "SSTP dialog ends successfully\n");
   
   end_tls_session(EXIT_SUCCESS);
-
-  free(cfg);
-  
+  xfree_cfg();
   return EXIT_SUCCESS;
 }
