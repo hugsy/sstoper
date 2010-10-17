@@ -7,10 +7,13 @@
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <openssl/sha.h>
 #include <openssl/md4.h>
 #include <openssl/hmac.h>
@@ -22,23 +25,23 @@
 #include "sstpclient.h"
 
 
-#if defined __Linux__
+#if defined ___Linux___
 #include <pty.h>
 
-#elif defined __FreeBSD__
+#elif defined ___Darwin___
+/*  Darwin compat */
+#include <util.h>
+
+#elif defined ___FreeBSD___
 /* FreeBSD compat */
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <libutil.h>
 
-#elif defined __OpenBSD__
+#elif defined ___OpenBSD___
 /* OpenBSD compat */
 #include <termios.h>
-#include <util.h>
-
-#elif defined __Darwin__
-/*  Darwin compat */
 #include <util.h>
 
 #endif 
@@ -120,11 +123,11 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
    */
   if (ntohs(header->length) != recv_len)
     {
-      if (cfg->verbose)
-	xlog(LOG_ERROR, "Unmatching length: annonced %lu, received %lu\n",
+      if (cfg->verbose > 2)
+	xlog(LOG_DEBUG, "Unmatching length: annonced %lu, received %lu\n",
 	     ntohs(header->length), recv_len);
       return FALSE;
-    }
+      }
 
   return TRUE;
 }
@@ -150,24 +153,20 @@ int is_control_packet(sstp_header_t* packet_header)
 int https_session_negociation()
 {
   ssize_t rbytes;
-  char *buf;
-  size_t read_size;
-  char guid[39];
+  char buf[1024], guid[39];
 
   /* sending HTTP request */
   rbytes = -1;
-  read_size = gnutls_record_get_max_size(tls);
   memset(guid, 0, 39);
-  buf = (char*) xmalloc(read_size);
+  memset(buf, 0, 1024);
   generate_guid(guid);
   
-  rbytes = snprintf(buf, read_size,
+  rbytes = snprintf(buf, 1024,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
 		    "Host: %s\r\n" /* <-- note: le hostname jamais valide cote serveur */
-		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak ici */
+		    "SSTPCORRELATIONID: nawak%s\r\n" /* <-- note: on peut mettre nawak ici */
 		    "Content-Length: %llu\r\n"
 		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
-		    /*"SSTPVERSION: 1.0"  <-- utilise pour les proxy, fail si envoye direct */
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
@@ -180,8 +179,8 @@ int https_session_negociation()
   sstp_send(buf, rbytes);
 
   /* waiting for and parsing response */
-  memset(buf, 0, read_size);
-  rbytes = gnutls_record_recv (tls, buf, read_size);
+  memset(buf, 0, 1024);
+  rbytes = gnutls_record_recv (tls, buf, 1024);
       
   if (rbytes > 0)
     {
@@ -201,25 +200,23 @@ int https_session_negociation()
       return -2;
     }
 
-  if (strstr(buf, "HTTP/1.1 200") == NULL) 
+  if (strncmp(buf, "HTTP/1.1 200", 12)) 
     return -3;
 
-  free(buf);
-  
   return 0;
 }
 
 /**
  * Emits SSTP negociation request, ie Control message with
- * ENCAPSULATED_PROTOCOL_ID attribute.
+ * ENCAPSULATED_PROTOCOL_ID attribute. Negociation timer is set up and state
+ * is changed.
  */
 void sstp_init()
 {
   uint16_t attribute_data;
   void* attribute;
   size_t attribute_len;
-  
-  /* send SSTP_MSG_CALL_CONNECT_REQUEST message */
+
   attribute_data = htons(SSTP_ENCAPSULATED_PROTOCOL_PPP);
   attribute_len = sizeof(sstp_attribute_header_t) + sizeof(uint16_t);
   attribute = create_attribute(SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID,
@@ -230,8 +227,6 @@ void sstp_init()
 
   free(attribute);
 
-
-  /* set alarm and change state */
   alarm(ctx->negociation_timer.tv_sec);
   set_client_status(CLIENT_CONNECT_REQUEST_SENT);
 
@@ -244,18 +239,11 @@ void sstp_init()
  * - start an SSTP negociation
  * - handle receive packets
  * - send packets
- *
- * When connection is over (i.e. client status is disconnected), free those regions.
- *
- * Output stream behaviour (i.e. to server):
- * pppd --> write(1, data) --> sstpclient --> write(tls, data) --> data
- * Input stream behaviour (i.e. from server):
- * pppd <-- write(0, data) <-- sstpclient <-- read(tls, data) <-- data
  */
 void sstp_loop()
 {
   size_t read_max_size;
-  fd_set msrd;
+  fd_set rcv_fd;
   int retcode;
 
   /* set buffer max len receive */
@@ -275,26 +263,27 @@ void sstp_loop()
   /* start sstp negociation */
   sstp_init();
 
+  
   /* main loop */
   while(ctx->state != CLIENT_CALL_DISCONNECTED)
     {
-      FD_ZERO(&msrd);
+      FD_ZERO(&rcv_fd);
       
       if (ctx->pppd_pid > 0)
-	FD_SET(0, &msrd);
+	FD_SET(0, &rcv_fd);
       
-      FD_SET(sockfd, &msrd);   
+      FD_SET(sockfd, &rcv_fd);   
 
-      retcode = select(sockfd + 1, &msrd, NULL, NULL, NULL);
+      retcode = select(sockfd + 1, &rcv_fd, NULL, NULL, NULL);
       
-      if ( retcode == -1 )
+      if ( retcode < 0 )
 	{
-	  xlog(LOG_ERROR, "sstp_loop: select failed: %s\n", strerror(errno));
+	  xlog(LOG_ERROR, "sstp_loop: %s\n", strerror(errno));	  
 	  set_client_status(CLIENT_CALL_DISCONNECTED);
 	  break;
 	}
 
-      if (ctx->pppd_pid > 0 && FD_ISSET(0, &msrd)) 
+      if (ctx->pppd_pid > 0 && FD_ISSET(0, &rcv_fd)) 
 	{
 	  /* read from 0 and sstp_send to dest */
 	  char rbuffer[read_max_size];
@@ -303,7 +292,7 @@ void sstp_loop()
 	  send_sstp_data_packet(rbuffer, rbytes);
 	}
       
-      if (FD_ISSET(sockfd, &msrd)) 
+      if (FD_ISSET(sockfd, &rcv_fd)) 
 	{
 	  /* sstp_read data from sockfd and write it to 1 */
 	  char rbuffer[read_max_size];
@@ -332,6 +321,26 @@ void sstp_loop()
 	}
 
     }
+
+  if (ctx->pppd_pid > 0) 
+    {	  
+      xlog(LOG_INFO, "Waiting for %s process (PID:%d) to end ... \t",
+	   cfg->pppd_path, ctx->pppd_pid);
+      
+      kill(ctx->pppd_pid, SIGINT);
+      waitpid(ctx->pppd_pid, &retcode, 0);
+      
+      if (retcode == 5)
+	xlog(LOG_INFO, "[OK]\n");
+      else
+	xlog(LOG_INFO, "[K0] (%d)\n", retcode);
+
+    }
+      
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Sending SSTP_MSG_CALL_DISCONNECT message.\n");
+  
+  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT, NULL, 0, 0);
   
   free(chap_ctx);
   free(ctx);
@@ -388,7 +397,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       attribute_ptr = (void*)(control_header) + sizeof(sstp_control_header_t);
 
       
-      /* checking control header */
+      /* checking control header and control type */
       sstp_length -= sizeof(sstp_control_header_t);
       if (sstp_length < 0)
 	{
@@ -396,8 +405,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  return -1;
 	}
 
-      /* fetching type */
-      if (!control_type || control_type > SSTP_MSG_ECHO_REPONSE)
+       if (!control_type || control_type > SSTP_MSG_ECHO_REPONSE)
 	{
 	  xlog(LOG_ERROR, "Incorrect control packet\n");
 	  return -1;  
@@ -410,6 +418,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
 	       control_messages_types_str[control_type], control_type);
 	  xlog(LOG_INFO, "\t-> attribute number: %d\n", control_num_attributes);
+	  xlog(LOG_INFO, "\t-> length: %d\n", (sstp_header->length - sizeof(sstp_header_t)));
 	}
       
       switch (control_type)
@@ -543,7 +552,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 
   return 0;
 }
-
+ 
 
 /**
  * Decode and parse every attribute provided within an SSTP control packet.
@@ -729,6 +738,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
 {
   sstp_control_header_t control_header;
   size_t control_length;
+  uint16_t i;
   void *data, *data_ptr, *attr_ptr;
 
   if (attributes == NULL && attribute_number != 0)
@@ -739,10 +749,20 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   
   control_length = sizeof(sstp_control_header_t) + attributes_len; 
   memset(&control_header, 0, sizeof(sstp_control_header_t));
-
+  
   /* setting control header */
   control_header.message_type = htons(msg_type);
   control_header.num_attributes = htons(attribute_number);
+
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "\t-> Control packet\n");
+      xlog(LOG_INFO, "\t-> type: %s (%x)\n",
+	   control_messages_types_str[msg_type], msg_type);
+      xlog(LOG_INFO, "\t-> attribute number: %d\n", attribute_number);
+      xlog(LOG_INFO, "\t-> length: %d\n", control_length);
+    }
+
 
   /* filling control with attributes */
   data = xmalloc(control_length);
@@ -751,17 +771,25 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   attr_ptr = attributes;
   data_ptr = data + sizeof(sstp_control_header_t);
   
-  while (attribute_number)
+  for (i=0; i<attribute_number; i++)
     {
       sstp_attribute_header_t* cur_attr = (sstp_attribute_header_t*)attr_ptr;
       uint16_t plen = ntohs(cur_attr->packet_length);
+
+      if (cfg->verbose)
+	{
+	  xlog(LOG_INFO, "\t\t--> Attribute %d\n", i);
+	  xlog(LOG_INFO, "\t\t--> type: %s (%x)\n",
+	       attr_types_str[cur_attr->attribute_id], cur_attr->attribute_id);
+	  xlog(LOG_INFO, "\t\t--> length: %d\n", cur_attr->packet_length);
+	}
       
       memcpy(data_ptr, attr_ptr, plen);
       attr_ptr += plen;
       data_ptr += plen;
-      attribute_number--;
     }
-    
+
+  
   /* yield to lower */
   send_sstp_packet(SSTP_CONTROL_PACKET, data, control_length);
 
@@ -1111,7 +1139,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
   if (cfg->verbose)
     {  
       /* show attribute */
-      xlog(LOG_INFO, "\t\t--> attr ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
+      xlog(LOG_INFO, "\t\t--> attr_ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
       xlog(LOG_INFO, "\t\t--> status\t%s (%#.2x)\n", attrib_status_str[status], status);
     }
   
@@ -1149,14 +1177,16 @@ int sstp_fork()
   char *pppd_path;
   char *pppd_args[32];
 
-  pppd_path = cfg->pppd_path;  
+  pppd_path = cfg->pppd_path;
   i = 0;
 
-#if defined __Linux__ || defined __Darwin__
+#if defined ___Linux___ || defined ___Darwin___
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
+  pppd_args[i++] = "noccp";
+  pppd_args[i++] = "nobsdcomp";
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";
@@ -1164,9 +1194,10 @@ int sstp_fork()
   pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
   
-#elif defined __FreeBSD__ || defined __OpenBSD__
+#elif defined ___FreeBSD___ || defined ___OpenBSD___
   pppd_args[i++] = "ppp"; 
-  pppd_args[i++] = "-background";
+  pppd_args[i++] = "-foreground";
+  pppd_args[i++] = "-quiet";
   pppd_args[i++] = "tweety";
   
 #endif
@@ -1200,28 +1231,31 @@ int sstp_fork()
     }
 
   ppp_pid = fork();
-  
+
+      
   if (ppp_pid > 0)
     {
+     
       dup2(amaster, 0);
       dup2(amaster, 1);
       
       if (aslave > 2) close(aslave);
-      if (amaster > 2) close(amaster);
-  
+      if (amaster > 2) close(amaster);     
+      
       return ppp_pid;
     }
   
   else if (ppp_pid == 0) 
     {
       close(sockfd);
-
+         
       dup2(aslave, 0);
       dup2(aslave, 1);
-
+      
       if (aslave > 2) close (aslave);
       if (amaster > 2) close (amaster);
-     
+
+      
       if (execv (pppd_path, pppd_args) == -1)
 	{
 	  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
@@ -1251,7 +1285,7 @@ int sstp_fork()
 uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
 {
   uint8_t *md = NULL;
-  unsigned int mdlen, i;
+  unsigned int mdlen;
   const EVP_MD* (*hmac)();
   unsigned int hash_len;
   
@@ -1284,13 +1318,6 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
 	   crypto_req_attrs_str[ctx->hash_algorithm]);
       free(md);
       return NULL;
-    }
-
-  if (mdlen < 32) 
-    {
-      /* filling with padding zero bytes */
-      for (i=mdlen; i<32; i++)
-	md[i] = 0;
     }
   
   return md; 

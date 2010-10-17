@@ -31,11 +31,6 @@
 #endif
 
 
-static sock_t init_tcp(char*, char*);
-static int init_tls_session();
-static int check_tls_session();
-static void end_tls_session(int);
-char *getpass( const char *prompt);
 
 /**
  * Logging function, displays log message to stderr.
@@ -54,7 +49,7 @@ void xlog(int type, const char* fmt, ...)
       break;
     case LOG_ERROR:
       fprintf(stderr, "[!] ");
-      break;     
+      break;
     case LOG_INFO:
     default :
       break;
@@ -105,23 +100,24 @@ void usage(char* name, int retcode)
   fd = (retcode == 0) ? stdout : stderr;
       
   fprintf(fd,
-	  "\n%s\nVersion: %.2f\nRelease: %s\n"
+	  "\n--------------------------------------------------------------------------------\n"
+	  "%s, %.2f - \"%s\"\n"
 	  "--\n"
 	  "SSTP VPN client for *nix\n"
-	  "----------------------------------------------------------------------\n\n"
+	  "--------------------------------------------------------------------------------\n\n"
 	  "Usage (as root):\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
 	  "\t-s, --server=my.sstp.server.com (mandatory)\tSSTP Server URI\n"
-	  "\t-c, --ca-file=/path/to/ca_file (mandatory)\tTrusted PEM formatted CA file\n"
+	  "\t-c, --ca-file=/path/to/ca_file (mandatory)\tPEM-format CA file\n"
 	  "\t-U, --username=USERNAME (mandatory)\t\tWindows username\n"
 	  "\t-P, --password=PASSWORD\t\t\t\tWindows password\n"	  
 	  "\t-p, --port=NUM\t\t\t\t\tAlternative server port\n"
-	  "\t-x, --pppd-path=/path/to/pppd\t\t\tSpecifies path to pppd executable\n"
-	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd activity in specified file\n"
-	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain for authentication\n"
+	  "\t-x, --pppd-path=/path/to/pppd\t\t\tpppd path\n"
+	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd in file\n"
+	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain\n"
 	  "\t-m, --proxy=PROXY\t\t\t\tSpecify proxy location\n"
 	  "\t-n, --proxy-port=PORT\t\t\t\tSpecify proxy port\n"
-	  "\t-v, --verbose\t\t\t\t\tIncrease verbose mode (accept multiple)\n"	  
+	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"	  
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  PROGNAME, VERSION, RELEASE, 
@@ -139,16 +135,18 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
   int curopt, curopt_idx;
  
   const struct option long_opts[] = {
-    { "help",      0, 0, 'h' },
-    { "verbose",   0, 0, 'v' },
-    { "server",    1, 0, 's' },
-    { "port",      1, 0, 'p' },
-    { "ca-file",   1, 0, 'c' },
-    { "username",  1, 0, 'U' },
-    { "password",  1, 0, 'P' },
+    { "help", 0, 0, 'h' },
+    { "verbose", 0, 0, 'v' },
+    { "server", 1, 0, 's' },
+    { "port", 1, 0, 'p' },
+    { "ca-file", 1, 0, 'c' },
+    { "username", 1, 0, 'U' },
+    { "password", 1, 0, 'P' },
     { "pppd-path", 1, 0, 'x' },
-    { "logfile",   1, 0, 'l' },
-    { "domain",    1, 0, 'd' },    
+    { "logfile", 1, 0, 'l' },
+    { "domain", 1, 0, 'd' },
+    { "proxy", 1, 0, 'm' },
+    { "proxy-port", 1, 0, 'n' },
     { 0, 0, 0, 0 } 
   };
 
@@ -157,7 +155,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:x:l:d:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:x:l:d:m:n:", long_opts, &curopt_idx);
 
       if (curopt == -1) break;
       
@@ -172,6 +170,8 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	case 'x': cfg->pppd_path = optarg; break;	  
 	case 'l': cfg->logfile = optarg; break;
 	case 'd': cfg->domain = optarg; break;
+	case 'm': cfg->proxy = optarg; break;
+	case 'n': cfg->proxy_port = optarg; break;
 	case 'h':
 	  usage (argv[0], EXIT_SUCCESS);
   	case '?':
@@ -218,25 +218,36 @@ void check_default_arg(char** argument, char* default_value)
 /**
  * Initiates TCP connection to `hostname` on port `port`
  *
- * @param hostname : host to connect to
- * @param port : TCP port `hostname` is listening
  * @return a socket (fd > 2) on success, a negative value on failure
  */
-static sock_t init_tcp(char* hostname, char* port)
+sock_t init_tcp()
 {
   sock_t sock;
   struct addrinfo hostinfo, *res, *ll;
 
+  char *host, *port;
+  
   memset(&hostinfo, 0, sizeof(struct addrinfo));
   hostinfo.ai_family = AF_UNSPEC;
   hostinfo.ai_socktype = SOCK_STREAM;
   hostinfo.ai_flags = 0;
   hostinfo.ai_protocol = 0;
 
-  /* TODO: tester en ip6 */
-  xlog(LOG_INFO, "Connecting to %s:%s ", hostname, port);
+  xlog(LOG_INFO, "Connecting to %s:%s ", cfg->server, cfg->port);
+
+  if (cfg->proxy)
+    {
+      xlog(LOG_INFO, "through proxy %s:%s ", cfg->proxy, cfg->proxy_port);
+      host = cfg->proxy;
+      port = cfg->proxy_port;
+    }
+  else 
+    {
+      host = cfg->server;
+      port = cfg->port;
+    }
   
-  if (getaddrinfo(hostname, port, &hostinfo, &res) == -1)
+  if (getaddrinfo(host, port, &hostinfo, &res) == -1)
     {
       xlog(LOG_ERROR, "getaddrinfo failed.\n");
       return -1;
@@ -283,11 +294,57 @@ static sock_t init_tcp(char* hostname, char* port)
 
 
 /**
+ * Establishes proxy CONNECT request to SSTP server. 
+ *
+ * @param sockfd
+ * @return 
+ */
+int proxy_connect(int sockfd) 
+{
+  char buffer[1024];
+  int len;
+  
+  memset(buffer, 0, 1024);
+  len = snprintf(buffer, 1024,
+		 "CONNECT %s:%s HTTP/1.0\r\n"
+		 "SSTPVERSION: 1.0\r\n"
+		 "User-Agent: %s-%.2f\r\n\r\n",
+		 cfg->proxy, cfg->proxy_port,
+		 PROGNAME, VERSION);
+
+  if (cfg->verbose > 2)
+    xlog(LOG_DEBUG, "Sending: %s\n", buffer);
+  
+  if (write(sockfd, buffer, len) < 0 )
+    {
+      xlog(LOG_ERROR, "Failed to send CONNECT\n%s", strerror(errno));
+      return -1;
+    }
+
+  memset(buffer, 0, 1024);
+  if (read(sockfd, buffer, 1024) < 0) 
+    {
+      xlog(LOG_ERROR, "Failed to read CONNECT response\n%s", strerror(errno));
+      return -1;
+    }
+
+  if (cfg->verbose > 2)
+    xlog(LOG_DEBUG, "Received: %s\n", buffer);
+
+  if (strncmp(buffer, "HTTP/1.0 200", 12) == 0 || strncmp(buffer, "HTTP/1.1 200", 12) == 0)
+    return 0;
+
+  xlog(LOG_ERROR, "Bad response from proxy\n");
+  
+  return -1;
+}
+
+/**
  * Wrapper socket in a GnuTLS session. There is no server certificate validation.
  *
  * @return 0 on success, or -1 on error.
  */
-static int init_tls_session()
+int init_tls_session()
 {
   int retcode;
   const char* err;
@@ -355,14 +412,9 @@ static int init_tls_session()
       return -1;
     }
 
-  /* check data in tls session */
   retcode = check_tls_session();
   if (retcode < 0 )
-    {
-      xlog(LOG_ERROR, "init_tls_session: fail to check tls server certificate:%s\n",
-	   gnutls_strerror(retcode));
-      return -1;
-    }
+    return -1;
 
   return 0;
 }
@@ -373,17 +425,14 @@ static int init_tls_session()
  *
  * @param reason: disconnection reason
  */ 
-static void end_tls_session(int reason)
+void end_tls_session(int reason)
 {
   int retcode;
-
-  if (cfg->verbose)
-    xlog(LOG_INFO, "End of TLS connection. Reason: %d.\n", reason);
   
   retcode = gnutls_bye(tls, GNUTLS_SHUT_WR);
   if (retcode != GNUTLS_E_SUCCESS)
     xlog(LOG_ERROR, "end_tls_session: %s\n", gnutls_strerror(retcode));
-  
+ 
   retcode = shutdown(sockfd, SHUT_WR);
   if (retcode < -1)
     xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
@@ -392,12 +441,12 @@ static void end_tls_session(int reason)
   if (retcode < -1)
     xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
 
-  if (cfg->verbose)
-    xlog(LOG_INFO, "Freeing regions.\n");
-
   gnutls_x509_crt_deinit (certificate);
   gnutls_deinit(tls);
   gnutls_global_deinit();
+
+  if (cfg->verbose)
+    xlog(LOG_INFO, "End of connection. Reason: %d.\n", reason);
 }
 
 
@@ -406,13 +455,12 @@ static void end_tls_session(int reason)
  *
  * @return 0 if all is good, -1 if not.
  */
-static int check_tls_session()
+int check_tls_session()
 {
   const gnutls_datum_t *certificate_list;
   unsigned int certificate_list_size;
   int retcode, i;
    
-  /* CA trust list verification */
   retcode = gnutls_certificate_type_get (tls);
   if (retcode != GNUTLS_CRT_X509)
     {
@@ -428,14 +476,12 @@ static int check_tls_session()
       return -1;
     }
   
-  /* browse certificate list, and picking the first valid */
   for (i=0; i<certificate_list_size; i++) 
     {
-      retcode = gnutls_x509_crt_import (certificate, &certificate_list[0], GNUTLS_X509_FMT_DER);
+      retcode = gnutls_x509_crt_import (certificate, &certificate_list[i], GNUTLS_X509_FMT_DER);
       if (retcode == GNUTLS_E_SUCCESS) return 0;
     }
 
-  /* otherwise return on error */
   xlog(LOG_ERROR, "check_tls_session: fail to import certificate\n");  
   return -1;
 }
@@ -458,41 +504,34 @@ void sighandle(int signum)
       break;
 
     case SIGCHLD:
-      waitpid(ctx->pppd_pid, &status, WNOHANG);     
-      xlog(LOG_INFO, "pppd (PID:%d) died with retcode %d\n", ctx->pppd_pid, status);
+      if (ctx != NULL) 
+	{
 
-      set_client_status(CLIENT_CALL_DISCONNECTED);
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "pppd (PID:%d) died unexpectedly ", ctx->pppd_pid);
+	  
+	  if (cfg->verbose > 2)
+	    {
+#ifdef ___Linux___
+	      xlog(LOG_INFO, "with retcode %d", WEXITSTATUS(status));
+#else
+	      xlog(LOG_INFO, "with retcode %d", status);
+#endif
+	    }
+
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "\n");
+	  
+	  ctx->pppd_pid = 0;
+	  set_client_status(CLIENT_CALL_DISCONNECTED);
+	}
+      
       break;
 
     case SIGINT:
-    case SIGTERM:     /* INT or TERM will provoke a nice ending for the SSTP session */
-      
-      if (ctx != NULL && ctx->pppd_pid > 0)
-	{
-	  /* kill pppd */
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "Waiting for pppd process to end.\n");
-	  if (cfg->verbose > 2)
-	    xlog(LOG_DEBUG, "Sending SIGINT to pppd process (PID:%d)\n", ctx->pppd_pid);
-	  
-	  kill(ctx->pppd_pid, SIGKILL);
-	  waitpid(ctx->pppd_pid, &status, WNOHANG);
-	}
-      
-      xlog(LOG_INFO, "Signal received: closing connection\n");
-
-      if (ctx->state == CLIENT_CALL_CONNECTED) 
-	{
-	  
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "Sending SSTP_MSG_CALL_DISCONNECT message.\n");
-
-	  /* close sstp connection, and disconnect */
-	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT, NULL, 0, 0);
-      }
-      
-      set_client_status(CLIENT_CALL_DISCONNECTED);
-      break;      
+    case SIGTERM: 
+      xlog(LOG_INFO, "Closing connection\n");
+      break;
     }
 }
 
@@ -516,13 +555,15 @@ int main (int argc, char** argv, char** envp)
   struct sigaction saction;
   int retcode;
 
-#if !defined  __Linux__ && !defined __FreeBSD__ \
-  && !defined __OpenBSD__ && !defined __Darwin__
+#if !defined  ___Linux___ && !defined ___FreeBSD___ \
+  && !defined ___OpenBSD___ && !defined ___Darwin___
+  
   xlog (LOG_ERROR, "Operating system not supported");
   return EXIT_FAILURE;
+  
 #endif
   
-  /* check user identifier */
+  /* check  */
   if (getuid() != 0) 
     {
       xlog (LOG_ERROR, "pppd requires sstpclient to be executed with root privileges.\n");
@@ -531,7 +572,6 @@ int main (int argc, char** argv, char** envp)
 
   envp = NULL;
   
-  /* configuration parsing and privilege check */
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
     
   parse_options(cfg, argc, argv);
@@ -544,29 +584,29 @@ int main (int argc, char** argv, char** envp)
     {
       if (cfg->verbose)
 	xlog(LOG_INFO, "No password specified, prompting for one.\n");
-      
+
       cfg->password = getpass("Password: ");
     }
   
   check_default_arg(&cfg->port, "443");
 
-#if defined __Linux__ || defined __Darwin__
+#if defined ___Linux___ || defined ___Darwin___
   check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
-#elif defined __FreeBSD__ || defined __OpenBSD__
+#elif defined ___FreeBSD___ || defined ___OpenBSD___
   check_default_arg(&cfg->pppd_path, "/usr/sbin/ppp");
 #endif
-  
+
+  if (cfg->proxy != NULL)
+    check_default_arg(&cfg->proxy_port, "8080");
+
   retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
-      xlog(LOG_ERROR, "Failed to access ppp.\n");
-      if (cfg->verbose)
-	xlog(LOG_ERROR, "%s\n", strerror(retcode));
+      xlog(LOG_ERROR, "Failed to access ppp executable.\n");
       return EXIT_FAILURE;
     }
 
-  /* SIGTERM and SIGINT close the connection properly */
-  /* set signal bitmask */
+  /* catch signal */
   sigemptyset(&sigset);
   sigfillset(&sigset);
   sigdelset(&sigset, SIGTERM);
@@ -575,20 +615,21 @@ int main (int argc, char** argv, char** envp)
   sigdelset(&sigset, SIGCHLD);
   sigprocmask(SIG_SETMASK, &sigset, NULL);
 
-  /* set sigaction */
   saction.sa_mask    = sigset;
   saction.sa_flags   = 0;
   saction.sa_handler = sighandle;
 
-  /* apply action to signal in bitmask */
   sigaction(SIGINT, &saction, NULL);
   sigaction(SIGTERM, &saction, NULL);
   sigaction(SIGALRM, &saction, NULL);
   sigaction(SIGCHLD, &saction, NULL);
 
-  
-  /* create socket  */
-  sockfd = init_tcp(cfg->server, cfg->port); 
+
+  /* main starts here */
+  if (cfg->verbose)
+    xlog (LOG_INFO, "Starting %s as %d\n", argv[0], getpid());
+
+  sockfd = init_tcp(); 
   if (sockfd < 0) 
     {
       xlog(LOG_ERROR, "TCP socket has failed, leaving...\n");
@@ -596,8 +637,18 @@ int main (int argc, char** argv, char** envp)
       return EXIT_FAILURE;
     }
 
+  if (cfg->proxy != NULL) 
+    {
+      retcode = proxy_connect(sockfd);
   
-  /* allocate and start gnutls session */
+      if (retcode < 0)
+	{
+	  xlog(LOG_ERROR, "Failed to establish proxy connection\n");
+	  free(cfg);
+	  return EXIT_FAILURE;
+	}
+    }
+  
   retcode = init_tls_session(sockfd, &tls); 
   if (retcode < 0)
     {
@@ -607,7 +658,6 @@ int main (int argc, char** argv, char** envp)
     }
 
   
-  /* http over ssl nego */
   if (cfg->verbose)
     xlog(LOG_INFO, "Performing HTTPS transaction\n");
   
@@ -621,19 +671,16 @@ int main (int argc, char** argv, char** envp)
     }
     
 
-  /* starting sstp */
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating SSTP negociation\n");
   
   sstp_loop();
 
-  /* end gnutls session */ 
   if (cfg->verbose)
     xlog(LOG_INFO, "SSTP dialog ends successfully\n");
   
   end_tls_session(EXIT_SUCCESS);
 
-  /* free allocated memory */
   free(cfg);
   
   return EXIT_SUCCESS;

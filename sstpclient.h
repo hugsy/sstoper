@@ -28,7 +28,7 @@ enum
   {
     LOG_DEBUG = 0,
     LOG_INFO,
-    LOG_ERROR
+    LOG_ERROR,
   };
 
 typedef struct 
@@ -41,7 +41,9 @@ typedef struct
   char* password;
   char* logfile;
   char* pppd_path;
-  char* domain;  
+  char* domain;
+  char* proxy;
+  char* proxy_port;
 } sstp_config;
 
 gnutls_session_t tls;
@@ -50,11 +52,14 @@ sock_t sockfd;
 sstp_config *cfg;
 
 
-/* compat ansi */
-#if !defined __Darwin__
+#if !defined ___Darwin___
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
 #endif
 
-/* functions declaration */
 void xlog(int type, const char* fmt, ...); 
 void* xmalloc(size_t size);
+sock_t init_tcp();
+int init_tls_session();
+int check_tls_session();
+void end_tls_session(int);
+char *getpass( const char *prompt);
