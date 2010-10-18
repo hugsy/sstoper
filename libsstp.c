@@ -155,7 +155,6 @@ int https_session_negociation()
   ssize_t rbytes;
   char buf[1024], guid[39];
 
-  /* sending HTTP request */
   rbytes = -1;
   memset(guid, 0, 39);
   memset(buf, 0, 1024);
@@ -178,7 +177,6 @@ int https_session_negociation()
 
   sstp_send(buf, rbytes);
 
-  /* waiting for and parsing response */
   memset(buf, 0, 1024);
   rbytes = gnutls_record_recv (tls, buf, 1024);
       
@@ -245,10 +243,8 @@ void sstp_loop()
   fd_set rcv_fd;
   int retcode;
 
-  /* set buffer max len receive */
   read_max_size = gnutls_record_get_max_size(tls);
   
-  /* initialize sstp context */
   ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
   ctx->retry = 5;
   ctx->state = CLIENT_CALL_DISCONNECTED;
@@ -256,14 +252,11 @@ void sstp_loop()
   ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->pppd_pid = -1;
 
-  /* initialize chap context */
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
 
-  /* start sstp negociation */
   sstp_init();
 
   
-  /* main loop */
   while(ctx->state != CLIENT_CALL_DISCONNECTED)
     {
       FD_ZERO(&rcv_fd);
@@ -284,17 +277,18 @@ void sstp_loop()
 
       if (ctx->pppd_pid > 0 && FD_ISSET(0, &rcv_fd)) 
 	{
-	  /* read from 0 and sstp_send to dest */
+
 	  char rbuffer[read_max_size];
 	  ssize_t rbytes = -1;
 	  rbytes = read(0, rbuffer, read_max_size);
 	  if (rbytes > 0)
 	    send_sstp_data_packet(rbuffer, rbytes);
+	  
 	}
       
       if (FD_ISSET(sockfd, &rcv_fd)) 
 	{
-	  /* sstp_read data from sockfd and write it to 1 */
+	  
 	  char rbuffer[read_max_size];
 	  ssize_t rbytes;
 
@@ -318,6 +312,7 @@ void sstp_loop()
 	  
 	  if (retcode < 0)
 	    break;
+	  
 	}
 
     }
@@ -362,7 +357,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
   sstp_header_t* sstp_header;
   int is_control, retcode;
 
-  /* packet validation */
   sstp_header = (sstp_header_t*) rbuffer;
   if (!is_valid_header(sstp_header, sstp_length))
     {
@@ -370,7 +364,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       return 0;
     } 
 
-  /* determine sstp packet type */
   is_control = is_control_packet(sstp_header);
   
   if (cfg->verbose)
@@ -476,10 +469,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  alarm(0);
 	  break;
 	  
-	  /*
-	   * Client SHOULD NEVER receive teh following message.
-	   * If so, close (dirtiliy) the client.
-	   */
+
 	case SSTP_MSG_CALL_CONNECT_REQUEST:
 	case SSTP_MSG_CALL_DISCONNECT_ACK:
 	default :

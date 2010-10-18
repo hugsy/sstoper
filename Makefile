@@ -5,12 +5,11 @@
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.1
-RELEASE		=	\"Tartiflette\"
 ARCH		=	$(shell uname)
 
 CC		=	gcc
 DBGFLAGS	=	-ggdb
-DEFINES		= 	-D ___$(ARCH)___ -D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION) -D RELEASE=$(RELEASE)
+DEFINES		= 	-D ___$(ARCH)___ -D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
 DEBUG		=	0
 
 ifeq ($(ARCH), Linux)

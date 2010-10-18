@@ -24,15 +24,12 @@
 #define PROGNAME "SSToPer"
 #endif
 #ifndef VERSION
-#define VERSION  "unk"
+#define VERSION 0.1
 #endif
-#ifndef RELEASE
-#define RELEASE "unk"
-#endif
-
 
 
 /**
+   
  * Logging function, displays log message to stderr.
  *
  * @param type : event type
@@ -120,9 +117,9 @@ void usage(char* name, int retcode)
       
   fprintf(fd,
 	  "\n--------------------------------------------------------------------------------\n"
-	  "%s, %.2f - \"%s\"\n"
+	  "%s, %.2f\n"
 	  "--\n"
-	  "SSTP VPN client for *nix\n"
+	  "SSTP VPN client for Linux\n"
 	  "--------------------------------------------------------------------------------\n\n"
 	  "Usage (as root):\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
@@ -139,8 +136,7 @@ void usage(char* name, int retcode)
 	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"	  
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
-	  PROGNAME, VERSION, RELEASE, 
-	  name);
+	  PROGNAME, VERSION, name);
   
   exit(retcode);
 }
