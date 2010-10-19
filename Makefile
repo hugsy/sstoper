@@ -25,14 +25,6 @@ else ifeq ($(ARCH), Darwin)
 INC		= 	-I/opt/local/include
 LIB		= 	-L/opt/local/lib 
 
-else ifeq ($(ARCH), FreeBSD) # exp
-INC		= 	-I/usr/local/include
-LIB		= 	-L/usr/local/lib
-
-else ifeq ($(ARCH), OpenBSD) # exp
-INC		= 	-I/usr/local/include
-LIB		= 	-L/usr/local/lib
-
 endif
 
 CFLAGS		=	-O2 -Wall $(DBGFLAGS) $(DEFINES) $(INC) $(LIB)

@@ -547,8 +547,9 @@ void sighandle(int signum)
       break;
 
     case SIGINT:
-    case SIGTERM: 
-      xlog(LOG_INFO, "Closing connection\n");
+    case SIGTERM:
+      if (cfg->verbose)
+	xlog(LOG_INFO, "Closing connection\n");
       break;
     }
 }
@@ -574,8 +575,7 @@ int main (int argc, char** argv, char** envp)
   int retcode;
   
 
-#if !defined  ___Linux___ && !defined ___FreeBSD___ \
-  && !defined ___OpenBSD___ && !defined ___Darwin___
+#if !defined  ___Linux___ && !defined ___Darwin___
   
   xlog (LOG_ERROR, "Operating system not supported");
   return EXIT_FAILURE;
@@ -610,12 +610,7 @@ int main (int argc, char** argv, char** envp)
     }
   
   check_default_arg(&cfg->port, "443");
-
-#if defined ___Linux___ || defined ___Darwin___
   check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
-#elif defined ___FreeBSD___ || defined ___OpenBSD___
-  check_default_arg(&cfg->pppd_path, "/usr/sbin/ppp");
-#endif
 
   if (cfg->proxy != NULL)
     check_default_arg(&cfg->proxy_port, "8080");

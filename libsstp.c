@@ -32,18 +32,6 @@
 /*  Darwin compat */
 #include <util.h>
 
-#elif defined ___FreeBSD___
-/* FreeBSD compat */
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <libutil.h>
-
-#elif defined ___OpenBSD___
-/* OpenBSD compat */
-#include <termios.h>
-#include <util.h>
-
 #endif 
 
 
@@ -1170,7 +1158,6 @@ int sstp_fork()
   pppd_path = cfg->pppd_path;
   i = 0;
 
-#if defined ___Linux___ || defined ___Darwin___
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
@@ -1183,14 +1170,6 @@ int sstp_fork()
   pppd_args[i++] = cfg->password;
   pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
-  
-#elif defined ___FreeBSD___ || defined ___OpenBSD___
-  pppd_args[i++] = "ppp"; 
-  pppd_args[i++] = "-foreground";
-  pppd_args[i++] = "-quiet";
-  pppd_args[i++] = "tweety";
-  
-#endif
 
   
   if (cfg->logfile != NULL) 

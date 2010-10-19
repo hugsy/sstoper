@@ -95,13 +95,8 @@ $
 
 Supported systems:
 ------------------
-Stable :
    * Linux (tested on Fedora 13 x86_64 and Debian Lenny i686)
    * Darwin (Mac OS X - Snow Leopard)
-
-Unstable :
-   * FreeBSD (on 7.3, 8.1 - i386)
-   * OpenBSD (on 4.7 - i386)
 
    
 Comments/Bugs:
