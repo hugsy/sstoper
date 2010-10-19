@@ -115,7 +115,7 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
 	xlog(LOG_DEBUG, "Unmatching length: annonced %lu, received %lu\n",
 	     ntohs(header->length), recv_len);
       return FALSE;
-      }
+    }
 
   return TRUE;
 }
@@ -396,7 +396,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       /* parsing control header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
+	  xlog(LOG_INFO, "\t-> type: %s (#%.2x)\n",
 	       control_messages_types_str[control_type], control_type);
 	  xlog(LOG_INFO, "\t-> attribute number: %d\n", control_num_attributes);
 	  xlog(LOG_INFO, "\t-> length: %d\n", (sstp_header->length - sizeof(sstp_header_t)));
@@ -735,7 +735,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t-> Control packet\n");
-      xlog(LOG_INFO, "\t-> type: %s (%x)\n",
+      xlog(LOG_INFO, "\t-> type: %s (#%.2x)\n",
 	   control_messages_types_str[msg_type], msg_type);
       xlog(LOG_INFO, "\t-> attribute number: %d\n", attribute_number);
       xlog(LOG_INFO, "\t-> length: %d\n", control_length);
@@ -1157,26 +1157,26 @@ int sstp_fork()
 
   pppd_path = cfg->pppd_path;
   i = 0;
-
+    
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
-  pppd_args[i++] = "noccp";
-  pppd_args[i++] = "nobsdcomp";
+  pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
+  pppd_args[i++] = "refuse-eap";
+  
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";
   pppd_args[i++] = cfg->password;
-  pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
-  pppd_args[i++] = "refuse-eap";
 
-  
+ 
   if (cfg->logfile != NULL) 
     {
       pppd_args[i++] = "logfile";
       pppd_args[i++] = cfg->logfile;
       pppd_args[i++] = "debug";
+      pppd_args[i++] = "dump";
     }
 
   if (cfg->domain != NULL)
@@ -1185,6 +1185,10 @@ int sstp_fork()
       pppd_args[i++] = cfg->domain;
     }
 
+#if defined ___Darwin___
+  pppd_args[i++] = "9600";
+#endif
+  
   pppd_args[i++] = NULL;
 
   memset(&pty, 0, sizeof(struct termios));

@@ -10,7 +10,7 @@ ARCH		=	$(shell uname)
 CC		=	gcc
 DBGFLAGS	=	-ggdb
 DEFINES		= 	-D ___$(ARCH)___ -D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
-DEBUG		=	0
+DEBUG		=	1
 
 ifeq ($(ARCH), Linux)
 INC		= 	-I/usr/include
@@ -27,14 +27,18 @@ LIB		= 	-L/opt/local/lib
 
 endif
 
-CFLAGS		=	-O2 -Wall $(DBGFLAGS) $(DEFINES) $(INC) $(LIB)
+CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
+ifeq ($(DEBUG), 1)
+CFLAGS		+=	$(DBGFLAGS)
+endif
+
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
 BIN		=	sstoper
 
-ARGS		=	-s vpn.tweety.looney -c ~/tmp/vpn.tweety.looney.crt -U test-sstp -P Hello1234
+ARGS		=	-s 192.168.111.195 -c ~/certnew.cer -U test-sstp -P Hello1234
 ifeq ($(DEBUG), 1)
-ARGS		+=	-vvv
+ARGS		+=	-vvv -l ./pppd_log
 endif
 
 .PHONY : clean all valgrind release snapshot test cvs
@@ -48,7 +52,7 @@ $(BIN) : $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) 
 
 clean :
-	rm -fr $(OBJECTS) $(BIN) *~ *swp \#*\# *.core
+	rm -fr $(OBJECTS) $(BIN) *~ *swp \#*\# *.core pppd_log
 
 valgrind: clean $(BIN)
 	valgrind --leak-check=full --show-reachable=yes ./$(BIN) $(ARGS)

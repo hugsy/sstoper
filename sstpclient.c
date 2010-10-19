@@ -119,7 +119,7 @@ void usage(char* name, int retcode)
 	  "\n--------------------------------------------------------------------------------\n"
 	  "%s, %.2f\n"
 	  "--\n"
-	  "SSTP VPN client for Linux\n"
+	  "SSTP VPN client for %s\n"
 	  "--------------------------------------------------------------------------------\n\n"
 	  "Usage (as root):\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
@@ -136,7 +136,13 @@ void usage(char* name, int retcode)
 	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"	  
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
-	  PROGNAME, VERSION, name);
+	  PROGNAME, VERSION,
+#if defined ___Linux___
+	  "Linux",
+#elif defined ___Darwin___
+	  "OS X",
+#endif
+	  name);
   
   exit(retcode);
 }
@@ -364,7 +370,7 @@ int init_tls_session()
   int retcode;
   const char* err;
 
-  if ( gnutls_check_version("2.8.6") == NULL)
+  /*if ( gnutls_check_version("2.8.6") == NULL)
     {
       if (gnutls_check_version("2.8.0") == NULL)
 	{
@@ -373,7 +379,7 @@ int init_tls_session()
 	}
 
       xlog(LOG_WARNING, "Old version of GnuTLS, some features might not work\n");
-    } 
+    } */
   
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
@@ -585,7 +591,7 @@ int main (int argc, char** argv, char** envp)
   /* check  */
   if (getuid() != 0) 
     {
-      xlog (LOG_ERROR, "pppd requires sstpclient to be executed with root privileges.\n");
+      xlog (LOG_ERROR, "pppd requires %s to be executed with root privileges.\n", argv[0]);
       usage(argv[0], EXIT_FAILURE);
     }
 
@@ -596,8 +602,16 @@ int main (int argc, char** argv, char** envp)
   parse_options(cfg, argc, argv);
   
   check_required_arg(cfg->server);
-  check_required_arg(cfg->ca_file);
   check_required_arg(cfg->username);
+  check_required_arg(cfg->ca_file);
+  
+  retcode = access (cfg->ca_file, R_OK);
+  if (retcode < 0)
+    {
+      xlog(LOG_ERROR, "%s is not readable.\n", cfg->ca_file);
+      xfree_cfg();
+      return EXIT_FAILURE;
+    }
 
   cfg->free_pwd = FALSE;
   if (cfg->password == NULL)
@@ -619,6 +633,7 @@ int main (int argc, char** argv, char** envp)
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to access ppp executable.\n");
+      xfree_cfg();
       return EXIT_FAILURE;
     }
 
