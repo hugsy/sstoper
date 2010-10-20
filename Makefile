@@ -78,4 +78,4 @@ test:   $(BIN)
 cvs:	clean
 	test -d ~/cvs/trucs/sstoper/ && \
 	cp -r * ~/cvs/trucs/sstoper/ && \
-	cd ~/cvs/trucs/sstoper/ && cvs ci -m "$(shell date): Merge HSC CVS"
+	cd ~/cvs/trucs/sstoper/ && cvs ci -m "$(shell date): Merge HSC CVS : $(shell git log -n 1)"
