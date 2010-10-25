@@ -28,10 +28,6 @@
 #if defined ___Linux___
 #include <pty.h>
 
-#elif defined ___Darwin___
-/*  Darwin compat */
-#include <util.h>
-
 #endif 
 
 
@@ -1184,11 +1180,7 @@ int sstp_fork()
       pppd_args[i++] = "domain";
       pppd_args[i++] = cfg->domain;
     }
-
-#if defined ___Darwin___
-  pppd_args[i++] = "9600";
-#endif
-  
+ 
   pppd_args[i++] = NULL;
 
   memset(&pty, 0, sizeof(struct termios));

@@ -92,12 +92,7 @@ Freeing regions.
 $ 
 }}}
 
-
-Supported systems:
-------------------
-   * Linux (tested on Fedora 13 x86_64 and Debian Lenny i686)
-   * Darwin (Mac OS X - Snow Leopard)
-
+Actually working on Linux, other system to be supported.
    
 Comments/Bugs:
 --------------

@@ -12,19 +12,12 @@ DBGFLAGS	=	-ggdb
 DEFINES		= 	-D ___$(ARCH)___ -D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
 DEBUG		=	1
 
-ifeq ($(ARCH), Linux)
 INC		= 	-I/usr/include
 
 ifeq ($(shell uname -m), x86_64)
 LIB		= 	-L/usr/lib64
 else
-LIB		= 	-L/usr/lib64
-endif
-
-else ifeq ($(ARCH), Darwin)
-INC		= 	-I/opt/local/include
-LIB		= 	-L/opt/local/lib 
-
+LIB		= 	-L/usr/lib
 endif
 
 CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
@@ -34,9 +27,9 @@ endif
 
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
-BIN		=	sstoper
+BIN			=	sstoper
 
-ARGS		=	-s 192.168.111.195 -c ~/certnew.cer -U test-sstp -P Hello1234
+ARGS		=	-s 192.168.111.195 -c ~/tmp/certnew.cer -U test-sstp -P Hello1234
 ifeq ($(DEBUG), 1)
 ARGS		+=	-vvv -l ./pppd_log
 endif

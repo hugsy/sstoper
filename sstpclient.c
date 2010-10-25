@@ -139,8 +139,6 @@ void usage(char* name, int retcode)
 	  PROGNAME, VERSION,
 #if defined ___Linux___
 	  "Linux",
-#elif defined ___Darwin___
-	  "OS X",
 #endif
 	  name);
   
@@ -581,7 +579,7 @@ int main (int argc, char** argv, char** envp)
   int retcode;
   
 
-#if !defined  ___Linux___ && !defined ___Darwin___
+#if !defined  ___Linux___
   
   xlog (LOG_ERROR, "Operating system not supported");
   return EXIT_FAILURE;

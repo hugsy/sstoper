@@ -1,9 +1,9 @@
 2010-10-14  hugsy  <hugsy@taz.hsc.fr>
 
        * added some more tests on sstp connection
-       * darwin integration supported
        * todo : - finish proxy integration
                 - finish *bsd support
+	        - finish darwin support
 
 2010-10-12 chris <chris@hades.olympe>
 

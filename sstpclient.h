@@ -55,9 +55,7 @@ sock_t sockfd;
 sstp_config *cfg;
 
 
-#if !defined ___Darwin___
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
-#endif
 
 void xlog(int type, const char* fmt, ...); 
 void* xmalloc(size_t size);
