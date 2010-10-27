@@ -25,9 +25,8 @@
 #include "sstpclient.h"
 
 
-#if defined ___Linux___
+#if defined __linux__
 #include <pty.h>
-
 #endif 
 
 
@@ -67,10 +66,14 @@ void generate_guid(char data[])
  */
 void set_client_status(uint8_t status)
 {
+  /* assert(status) */
+  if (ctx->state == status)
+    return;
+  
   ctx->state = status;
 
   if (cfg->verbose)
-    xlog(LOG_INFO, "Client status : %s (%#x)\n",
+    xlog(LOG_INFO, "Status is %s (%#x)\n",
 	 client_status_str[ctx->state], ctx->state);
 }
 
@@ -96,7 +99,7 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
       header->reserved != SSTP_CONTROL_PACKET)
     {
       if (cfg->verbose)
-	xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
+		xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
       return FALSE;
     }
 
@@ -105,13 +108,15 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
    * le 1er packet ppp recu du serveur possede une taille de paquet differente de celle
    * annonce dans le header sstp -> test de la taille echoue 
    */
-  if (ntohs(header->length) != recv_len)
+  header->length = ntohs(header->length);
+  if (header->length != recv_len)
     {
       if (cfg->verbose > 2)
 	xlog(LOG_DEBUG, "Unmatching length: annonced %lu, received %lu\n",
-	     ntohs(header->length), recv_len);
+	     header->length, recv_len);
       return FALSE;
     }
+
 
   return TRUE;
 }
@@ -147,9 +152,9 @@ int https_session_negociation()
   rbytes = snprintf(buf, 1024,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
 		    "Host: %s\r\n" /* <-- note: le hostname jamais valide cote serveur */
-		    "SSTPCORRELATIONID: nawak%s\r\n" /* <-- note: on peut mettre nawak ici */
+		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak ici */
 		    "Content-Length: %llu\r\n"
-		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
+		    /* "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n" */
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
@@ -246,36 +251,32 @@ void sstp_loop()
       FD_ZERO(&rcv_fd);
       
       if (ctx->pppd_pid > 0)
-	FD_SET(0, &rcv_fd);
+		FD_SET(0, &rcv_fd);
       
       FD_SET(sockfd, &rcv_fd);   
-
+	  
       retcode = select(sockfd + 1, &rcv_fd, NULL, NULL, NULL);
-      
       if ( retcode < 0 )
 	{
 	  xlog(LOG_ERROR, "sstp_loop: %s\n", strerror(errno));	  
 	  set_client_status(CLIENT_CALL_DISCONNECTED);
 	  break;
 	}
-
+      
       if (ctx->pppd_pid > 0 && FD_ISSET(0, &rcv_fd)) 
 	{
-
 	  char rbuffer[read_max_size];
 	  ssize_t rbytes = -1;
 	  rbytes = read(0, rbuffer, read_max_size);
 	  if (rbytes > 0)
 	    send_sstp_data_packet(rbuffer, rbytes);
-	  
 	}
       
       if (FD_ISSET(sockfd, &rcv_fd)) 
 	{
-	  
 	  char rbuffer[read_max_size];
 	  ssize_t rbytes;
-
+	  
 	  rbytes = gnutls_record_recv (tls, rbuffer, read_max_size);
 	  if (rbytes < 0)
 	    {
@@ -287,33 +288,28 @@ void sstp_loop()
 	    {
 	      xlog(LOG_INFO, "sstp_loop: EOF\n");
 	    }
-	  
+		  
 	  else 
 	    {
 	      xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
 	      retcode = sstp_decode(rbuffer, rbytes);
 	    }
-	  
+		  
 	  if (retcode < 0)
 	    break;
-	  
 	}
-
     }
 
   if (ctx->pppd_pid > 0) 
     {	  
-      xlog(LOG_INFO, "Waiting for %s process (PID:%d) to end ... \t",
+      xlog(LOG_INFO, "Waiting for %s process (PID:%d) to end\n",
 	   cfg->pppd_path, ctx->pppd_pid);
       
       kill(ctx->pppd_pid, SIGINT);
       waitpid(ctx->pppd_pid, &retcode, 0);
       
-      if (retcode == 5)
-	xlog(LOG_INFO, "[OK]\n");
-      else
-	xlog(LOG_INFO, "[K0] (%d)\n", retcode);
-
+      if (retcode)
+	xlog(LOG_INFO, "Failed to quit pppd, retcode %d\n", retcode);
     }
       
   if (cfg->verbose)
@@ -392,7 +388,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       /* parsing control header */
       if (cfg->verbose)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (#%.2x)\n",
+	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
 	       control_messages_types_str[control_type], control_type);
 	  xlog(LOG_INFO, "\t-> attribute number: %d\n", control_num_attributes);
 	  xlog(LOG_INFO, "\t-> length: %d\n", (sstp_header->length - sizeof(sstp_header_t)));
@@ -731,7 +727,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   if (cfg->verbose)
     {
       xlog(LOG_INFO, "\t-> Control packet\n");
-      xlog(LOG_INFO, "\t-> type: %s (#%.2x)\n",
+      xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
 	   control_messages_types_str[msg_type], msg_type);
       xlog(LOG_INFO, "\t-> attribute number: %d\n", attribute_number);
       xlog(LOG_INFO, "\t-> length: %d\n", control_length);
@@ -1136,9 +1132,8 @@ int attribute_status_info(void* data, uint16_t attr_len)
 
 
 /**
- * Adapted from ssl_ppp_fork() in /ssltunnel-1.18/client/main.c
- * At http://www.hsc.fr/ressources/outils/ssltunnel/download/ssltunnel-1.18.tar.gz
- * Alain Thivillon & Herve Schauer Consultants (c)
+ * Based on ssl_ppp_fork() in ssltunnel-1.18/client/main.c
+ * Alain Thivillon (Herve Schauer Consultants)
  *
  * Fork and execute pppd daemon
  * @return child pid if process is the father or error otherwise (execv pppd)
@@ -1160,7 +1155,7 @@ int sstp_fork()
   pppd_args[i++] = "noauth";
   pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
-  
+   
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";
@@ -1196,7 +1191,6 @@ int sstp_fork()
     }
 
   ppp_pid = fork();
-
       
   if (ppp_pid > 0)
     {
@@ -1222,15 +1216,17 @@ int sstp_fork()
 
       
       if (execv (pppd_path, pppd_args) == -1)
-	{
-	  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
-	  return -1;
-	}
+		{
+		  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
+		  return -1;
+		}
     }
 
   else 
     {
       xlog (LOG_ERROR, "sstp_fork: %s\n", strerror(errno));
+      set_client_status(CLIENT_CALL_DISCONNECTED);
+      
       return -1;
     }
 
@@ -1280,7 +1276,7 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
   if (mdlen != hash_len)
     {
       xlog(LOG_ERROR, "%s function didn't return valid data!\n",
-	   crypto_req_attrs_str[ctx->hash_algorithm]);
+		   crypto_req_attrs_str[ctx->hash_algorithm]);
       free(md);
       return NULL;
     }
@@ -1309,7 +1305,7 @@ void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t pass
     }   
 
   memset(buf, 0, 512);
-  /* Convert password into unicode */
+  /* Convert password into Unicode */
   for (i=0; i<password_len; i++)
     {
       buf[i*2] = password[i];
@@ -1335,10 +1331,7 @@ void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse)
   SHA_CTX c;
   uint8_t Digest[20];
   
-  /*
-   * "Magic" constants used in key derivations
-   */
-  
+  /* "Magic" constants used in key derivations */
   static unsigned char Magic1[27] =
     {
       0x54, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x74,
@@ -1365,9 +1358,7 @@ void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
   uint8_t *Magic;
   SHA_CTX c;
 
-  /*
-   * Pads used in key derivation
-   */
+  /* Pads used in key derivation */
   static unsigned char SHSpad1[40] =
     {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1384,10 +1375,7 @@ void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
       0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2, 0xf2
     };
 
-  /*
-   * "Magic" constants used in key derivations
-   */
- 
+  /* "Magic" constants used in key derivations */
   static unsigned char Magic2[84] =
     {
       0x4f, 0x6e, 0x20, 0x74, 0x68, 0x65, 0x20, 0x63, 0x6c, 0x69,

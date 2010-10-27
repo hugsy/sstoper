@@ -7,9 +7,9 @@ AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.1
 ARCH		=	$(shell uname)
 
-CC		=	gcc
+CC			=	gcc
 DBGFLAGS	=	-ggdb
-DEFINES		= 	-D ___$(ARCH)___ -D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
+DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
 DEBUG		=	1
 
 INC		= 	-I/usr/include

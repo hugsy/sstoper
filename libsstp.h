@@ -228,7 +228,7 @@ typedef struct __sstp_context
   uint32_t cmac[8];
 } sstp_context_t;
 
-static UNUSED sstp_context_t* ctx;
+sstp_context_t* ctx;
 
 typedef struct __chap_context 
 {
@@ -238,7 +238,7 @@ typedef struct __chap_context
   unsigned char response_flags[1];
 } chap_context_t;
 
-static UNUSED chap_context_t* chap_ctx;
+chap_context_t* chap_ctx;
 
 
 /* functions declarations  */

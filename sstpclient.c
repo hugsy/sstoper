@@ -10,6 +10,7 @@
 #include <inttypes.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <time.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
 #include <sys/types.h>
@@ -38,6 +39,17 @@
 void xlog(int type, const char* fmt, ...) 
 {
   va_list ap;
+  time_t t;
+  struct tm *tm;
+  char time_buf[128];
+
+  if (type != LOG_INFO) 
+    {   
+      t = time(NULL);
+      tm = localtime(&t);
+      strftime(time_buf, 128, "%F %T", tm);
+      fprintf(stderr, "%s  ", time_buf);
+    }
   
   switch (type) 
     {
@@ -137,7 +149,7 @@ void usage(char* name, int retcode)
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  PROGNAME, VERSION,
-#if defined ___Linux___
+#if defined __linux__
 	  "Linux",
 #endif
 	  name);
@@ -180,24 +192,24 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       if (curopt == -1) break;
       
       switch (curopt)
-	{
-	case 'v': cfg->verbose++; break;
-	case 's': cfg->server = optarg; break;
-	case 'p': cfg->port = optarg; break;
-	case 'c': cfg->ca_file = optarg; break;
-	case 'U': cfg->username = optarg; break;	  
-	case 'P': cfg->password = optarg; break;
-	case 'x': cfg->pppd_path = optarg; break;	  
-	case 'l': cfg->logfile = optarg; break;
-	case 'd': cfg->domain = optarg; break;
-	case 'm': cfg->proxy = optarg; break;
-	case 'n': cfg->proxy_port = optarg; break;
-	case 'h':
-	  usage (argv[0], EXIT_SUCCESS);
-  	case '?':
-	default:
-	  usage (argv[0], EXIT_FAILURE);
-	}
+		{
+		case 'v': cfg->verbose++; break;
+		case 's': cfg->server = optarg; break;
+		case 'p': cfg->port = optarg; break;
+		case 'c': cfg->ca_file = optarg; break;
+		case 'U': cfg->username = optarg; break;	  
+		case 'P': cfg->password = optarg; break;
+		case 'x': cfg->pppd_path = optarg; break;	  
+		case 'l': cfg->logfile = optarg; break;
+		case 'd': cfg->domain = optarg; break;
+		case 'm': cfg->proxy = optarg; break;
+		case 'n': cfg->proxy_port = optarg; break;
+		case 'h':
+		  usage (argv[0], EXIT_SUCCESS);
+		case '?':
+		default:
+		  usage (argv[0], EXIT_FAILURE);
+		}
       curopt_idx = 0;
     }
 }
@@ -266,43 +278,44 @@ sock_t init_tcp()
       host = cfg->server;
       port = cfg->port;
     }
-  
+  xlog(LOG_INFO, "\n");
+
   if (getaddrinfo(host, port, &hostinfo, &res) < 0)
     {
-      xlog(LOG_INFO, "\t\t[KO]\n");
+      xlog(LOG_INFO, "getaddrinfo failed\n");
       if (cfg->verbose > 2)
-	xlog(LOG_DEBUG, "%s\n", strerror(errno));
+		xlog(LOG_DEBUG, "%s\n", strerror(errno));
       
       freeaddrinfo(res);
       return -1;
     }
   
-  for (ll = res; ll ; ll = ll->ai_next)
+  for (ll = res; ll; ll = ll->ai_next)
     {
       sock = socket(ll->ai_family,
-		    ll->ai_socktype,
-		    ll->ai_protocol);
+					ll->ai_socktype,
+					ll->ai_protocol);
     
       if (sock == -1)
-	continue;
+		continue;
     
       if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
-	break;
+		break;
       
       close(sock);
     }
   
   if (ll == NULL)
     {
-      xlog(LOG_INFO, "\t\t[KO]\n");
+      xlog(LOG_INFO, "connect failed\n");
       if (errno && cfg->verbose > 2)
-	xlog(LOG_DEBUG, "%s\n", strerror(errno));
+		xlog(LOG_DEBUG, "%s\n", strerror(errno));
       
       freeaddrinfo(res);
       return -1;
     }
 
-  xlog(LOG_INFO, "\t[OK]");
+  xlog(LOG_INFO, "Connected");
   if (cfg->verbose) xlog(LOG_INFO, " (%ld)", sock);
   xlog(LOG_INFO, "\n");
 
@@ -316,7 +329,7 @@ sock_t init_tcp()
  * Establishes proxy CONNECT request to SSTP server. 
  *
  * @param sockfd
- * @return 
+ * @return 0 if succeeded in connecting through proxy, negative otherwise
  */
 int proxy_connect(int sockfd) 
 {
@@ -325,11 +338,11 @@ int proxy_connect(int sockfd)
   
   memset(buffer, 0, 1024);
   len = snprintf(buffer, 1024,
-		 "CONNECT %s:%s HTTP/1.0\r\n"
-		 "SSTPVERSION: 1.0\r\n"
-		 "User-Agent: %s-%.2f\r\n\r\n",
-		 cfg->server, cfg->port,
-		 PROGNAME, VERSION);
+				 "CONNECT %s:%s HTTP/1.0\r\n"
+				 "SSTPVERSION: 1.0\r\n"
+				 "User-Agent: %s-%.2f\r\n\r\n",
+				 cfg->server, cfg->port,
+				 PROGNAME, VERSION);
 
   if (cfg->verbose > 2)
     xlog(LOG_DEBUG, "Sending: %s\n", buffer);
@@ -367,17 +380,6 @@ int init_tls_session()
 {
   int retcode;
   const char* err;
-
-  /*if ( gnutls_check_version("2.8.6") == NULL)
-    {
-      if (gnutls_check_version("2.8.0") == NULL)
-	{
-	  xlog(LOG_ERROR, "Unsupported GnuTLS version\n");
-	  return -1;
-	}
-
-      xlog(LOG_WARNING, "Old version of GnuTLS, some features might not work\n");
-    } */
   
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
@@ -393,7 +395,7 @@ int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
-	xlog(LOG_ERROR, (char*)err);
+		xlog(LOG_ERROR, (char*)err);
       
       return -1;
     }
@@ -401,7 +403,8 @@ int init_tls_session()
   retcode = gnutls_certificate_allocate_credentials (&creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      xlog(LOG_ERROR, "gnutls_certificate_allocate_credentials %s\n", gnutls_strerror(retcode));
+      xlog(LOG_ERROR, "gnutls_certificate_allocate_credentials %s\n",
+		   gnutls_strerror(retcode));
       return -1;
     }
 
@@ -409,7 +412,7 @@ int init_tls_session()
   if (retcode < 1 )
     {
       xlog(LOG_ERROR, "gnutls_certificate_set_x509_trust_file: no valid certificate.\n%s\n",
-	   gnutls_strerror(retcode));
+		   gnutls_strerror(retcode));
       return -1;
     }
 
@@ -417,7 +420,7 @@ int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS )
     {
       xlog(LOG_ERROR, "init_tls_session: tls_credentials_set\n%s",
-	   gnutls_strerror(retcode));
+		   gnutls_strerror(retcode));
       return -1;
     }
   
@@ -428,7 +431,7 @@ int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS)
     {
       xlog(LOG_ERROR, "init_tls_session: gnutls_handshake: %s\n",
-	   gnutls_strerror(retcode));
+		   gnutls_strerror(retcode));
       end_tls_session(retcode);
       return -1;
     }
@@ -516,44 +519,25 @@ int check_tls_session()
  */
 void sighandle(int signum)
 {
-  int status = 0;
-  
+
   switch(signum) 
     {
     case SIGALRM:
-      xlog(LOG_INFO, "Timer has expired, disconnecting\n");
+      xlog(LOG_ERROR, "Timer has expired, disconnecting\n");
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
 
     case SIGCHLD:
-      if (ctx != NULL) 
-	{
-
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "pppd (PID:%d) died unexpectedly ", ctx->pppd_pid);
-	  
-	  if (cfg->verbose > 2)
-	    {
-#ifdef ___Linux___
-	      xlog(LOG_INFO, "with retcode %d", WEXITSTATUS(status));
-#else
-	      xlog(LOG_INFO, "with retcode %d", status);
-#endif
-	    }
-
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "\n");
-	  
-	  ctx->pppd_pid = 0;
-	  set_client_status(CLIENT_CALL_DISCONNECTED);
-	}
-      
+      if (cfg->verbose)
+	xlog(LOG_ERROR, "%s (PID:%d) died\n", cfg->pppd_path, ctx->pppd_pid);
+      set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
 
     case SIGINT:
-    case SIGTERM:
       if (cfg->verbose)
 	xlog(LOG_INFO, "Closing connection\n");
+      
+      set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
     }
 }
@@ -574,16 +558,12 @@ void sighandle(int signum)
  */
 int main (int argc, char** argv, char** envp)
 {
-  sigset_t sigset;
   struct sigaction saction;
   int retcode;
   
-
-#if !defined  ___Linux___
-  
-  xlog (LOG_ERROR, "Operating system not supported");
+#if !defined  __linux__
+  xlog (LOG_ERROR, "Operating system not supported\n");
   return EXIT_FAILURE;
-  
 #endif
   
   /* check  */
@@ -593,8 +573,6 @@ int main (int argc, char** argv, char** envp)
       usage(argv[0], EXIT_FAILURE);
     }
 
-  envp = NULL;
-  
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
     
   parse_options(cfg, argc, argv);
@@ -615,7 +593,7 @@ int main (int argc, char** argv, char** envp)
   if (cfg->password == NULL)
     {
       if (cfg->verbose)
-	xlog(LOG_INFO, "No password specified, prompting for one.\n");
+		xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
       cfg->password = getpass("Password: ");
       cfg->free_pwd = TRUE;
@@ -630,26 +608,18 @@ int main (int argc, char** argv, char** envp)
   retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
-      xlog(LOG_ERROR, "Failed to access ppp executable.\n");
+      xlog(LOG_ERROR, "Failed to access ppp binary.\n");
       xfree_cfg();
       return EXIT_FAILURE;
     }
 
   /* catch signal */
-  sigemptyset(&sigset);
-  sigfillset(&sigset);
-  sigdelset(&sigset, SIGTERM);
-  sigdelset(&sigset, SIGINT);
-  sigdelset(&sigset, SIGALRM);
-  sigdelset(&sigset, SIGCHLD);
-  sigprocmask(SIG_SETMASK, &sigset, NULL);
-
-  saction.sa_mask    = sigset;
-  saction.sa_flags   = 0;
+  memset(&saction, 0, sizeof(struct sigaction));
   saction.sa_handler = sighandle;
+  saction.sa_flags = SA_NOCLDSTOP|SA_NOCLDWAIT;
+  sigemptyset(&saction.sa_mask);
 
   sigaction(SIGINT, &saction, NULL);
-  sigaction(SIGTERM, &saction, NULL);
   sigaction(SIGALRM, &saction, NULL);
   sigaction(SIGCHLD, &saction, NULL);
 
@@ -671,10 +641,10 @@ int main (int argc, char** argv, char** envp)
       retcode = proxy_connect(sockfd);
   
       if (retcode < 0)
-	{
-	  xfree_cfg();
-	  return EXIT_FAILURE;
-	}
+		{
+		  xfree_cfg();
+		  return EXIT_FAILURE;
+		}
     }
   
   retcode = init_tls_session(sockfd, &tls); 
