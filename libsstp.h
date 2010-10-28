@@ -20,11 +20,14 @@
 #define SSTP_MAX_ATTR 256
 #define SSTP_NEGOCIATION_TIMER 60
 #define SSTP_PING_TIMER 30
-#define SSTP_MAX_BUFFER_SIZE 1024
 #define SSTP_SEED_PREFIX "SSTP inner method derived CMK"
 #define SSTP_CMAC_SEED_PREFIX_LEN  29
 #define SHA1_HASH_LEN 0x0014
 #define SHA256_HASH_LEN 0x0020
+
+
+#define PPP_MAX_MTU 4096
+#define PPP_MAX_MRU 4096
 
 
 /* SSTP Packet Type */
@@ -212,11 +215,18 @@ typedef struct __sstp_attribute_status_info
   uint32_t status;
 } sstp_attribute_status_info_t;
 
+enum _flags 
+  {
+    REMOTE_DISCONNECTION,
+    NEGOCIATION_TIMER_RAISED,
+    HELLO_TIMER_RAISED,
+  };
 
 /* sstp client context */
 typedef struct __sstp_context 
 {
   unsigned char state;
+  unsigned char flags;
   unsigned char retry;
   pid_t pppd_pid;
   struct timeval negociation_timer;

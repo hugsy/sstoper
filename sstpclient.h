@@ -46,6 +46,7 @@ typedef struct
   char* domain;
   char* proxy;
   char* proxy_port;
+  int quiet_mode;
 } sstp_config;
 
 gnutls_session_t tls;

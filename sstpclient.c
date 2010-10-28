@@ -1,3 +1,4 @@
+#define _GNU_SOURCE 1
 #define _POSIX_SOURCE 1
 
 #include <stdio.h>
@@ -30,7 +31,6 @@
 
 
 /**
-   
  * Logging function, displays log message to stderr.
  *
  * @param type : event type
@@ -145,7 +145,8 @@ void usage(char* name, int retcode)
 	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain\n"
 	  "\t-m, --proxy=PROXY\t\t\t\tSpecify proxy location\n"
 	  "\t-n, --proxy-port=PORT\t\t\t\tSpecify proxy port\n"
-	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"	  
+	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"
+	  "\t-q, --quiet\t\t\t\t\tQuiet prints minimalist infos\n"
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  PROGNAME, VERSION,
@@ -169,6 +170,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
   const struct option long_opts[] = {
     { "help", 0, 0, 'h' },
     { "verbose", 0, 0, 'v' },
+    { "quiet", 0, 0, 'q' },
     { "server", 1, 0, 's' },
     { "port", 1, 0, 'p' },
     { "ca-file", 1, 0, 'c' },
@@ -187,29 +189,30 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvs:p:c:U:P:x:l:d:m:n:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv, "hvqs:p:c:U:P:x:l:d:m:n:", long_opts, &curopt_idx);
 
       if (curopt == -1) break;
       
       switch (curopt)
-		{
-		case 'v': cfg->verbose++; break;
-		case 's': cfg->server = optarg; break;
-		case 'p': cfg->port = optarg; break;
-		case 'c': cfg->ca_file = optarg; break;
-		case 'U': cfg->username = optarg; break;	  
-		case 'P': cfg->password = optarg; break;
-		case 'x': cfg->pppd_path = optarg; break;	  
-		case 'l': cfg->logfile = optarg; break;
-		case 'd': cfg->domain = optarg; break;
-		case 'm': cfg->proxy = optarg; break;
-		case 'n': cfg->proxy_port = optarg; break;
-		case 'h':
-		  usage (argv[0], EXIT_SUCCESS);
-		case '?':
-		default:
-		  usage (argv[0], EXIT_FAILURE);
-		}
+	{
+	case 'v': cfg->verbose++; break;
+	case 's': cfg->server = optarg; break;
+	case 'p': cfg->port = optarg; break;
+	case 'c': cfg->ca_file = optarg; break;
+	case 'U': cfg->username = optarg; break;	  
+	case 'P': cfg->password = optarg; break;
+	case 'x': cfg->pppd_path = optarg; break;	  
+	case 'l': cfg->logfile = optarg; break;
+	case 'd': cfg->domain = optarg; break;
+	case 'm': cfg->proxy = optarg; break;
+	case 'n': cfg->proxy_port = optarg; break;
+	case 'q': cfg->quiet_mode = 1; break;
+	case 'h':
+	  usage (argv[0], EXIT_SUCCESS);
+	case '?':
+	default:
+	  usage (argv[0], EXIT_FAILURE);
+	}
       curopt_idx = 0;
     }
 }
@@ -338,12 +341,12 @@ int proxy_connect(int sockfd)
   
   memset(buffer, 0, 1024);
   len = snprintf(buffer, 1024,
-				 "CONNECT %s:%s HTTP/1.0\r\n"
-				 "SSTPVERSION: 1.0\r\n"
-				 "User-Agent: %s-%.2f\r\n\r\n",
-				 cfg->server, cfg->port,
-				 PROGNAME, VERSION);
-
+		 "CONNECT %s:%s HTTP/1.0\r\n"
+		 "SSTPVERSION: 1.0\r\n"
+		 "User-Agent: %s-%.2f\r\n\r\n",
+		 cfg->server, cfg->port,
+		 PROGNAME, VERSION);
+  
   if (cfg->verbose > 2)
     xlog(LOG_DEBUG, "Sending: %s\n", buffer);
   
@@ -384,18 +387,11 @@ int init_tls_session()
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
 
-  retcode = gnutls_record_set_max_size(tls, SSTP_MAX_BUFFER_SIZE);
-  if (retcode != GNUTLS_E_SUCCESS)
-    {
-      xlog(LOG_ERROR, "gnutls_record_set_max_size: %s", gnutls_strerror(retcode));
-      return -1;
-    }
-  
   retcode = gnutls_priority_set_direct (tls, "SECURE256", &err);  
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
-		xlog(LOG_ERROR, (char*)err);
+	xlog(LOG_ERROR, (char*)err);
       
       return -1;
     }
@@ -404,7 +400,7 @@ int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS )
     {
       xlog(LOG_ERROR, "gnutls_certificate_allocate_credentials %s\n",
-		   gnutls_strerror(retcode));
+	   gnutls_strerror(retcode));
       return -1;
     }
 
@@ -412,7 +408,7 @@ int init_tls_session()
   if (retcode < 1 )
     {
       xlog(LOG_ERROR, "gnutls_certificate_set_x509_trust_file: no valid certificate.\n%s\n",
-		   gnutls_strerror(retcode));
+	   gnutls_strerror(retcode));
       return -1;
     }
 
@@ -420,7 +416,7 @@ int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS )
     {
       xlog(LOG_ERROR, "init_tls_session: tls_credentials_set\n%s",
-		   gnutls_strerror(retcode));
+	   gnutls_strerror(retcode));
       return -1;
     }
   
@@ -431,11 +427,11 @@ int init_tls_session()
   if (retcode != GNUTLS_E_SUCCESS)
     {
       xlog(LOG_ERROR, "init_tls_session: gnutls_handshake: %s\n",
-		   gnutls_strerror(retcode));
+	   gnutls_strerror(retcode));
       end_tls_session(retcode);
       return -1;
     }
-
+  
   retcode = check_tls_session();
   if (retcode < 0 )
     return -1;
@@ -565,14 +561,14 @@ int main (int argc, char** argv, char** envp)
   xlog (LOG_ERROR, "Operating system not supported\n");
   return EXIT_FAILURE;
 #endif
-  
+
   /* check  */
   if (getuid() != 0) 
     {
       xlog (LOG_ERROR, "pppd requires %s to be executed with root privileges.\n", argv[0]);
       usage(argv[0], EXIT_FAILURE);
     }
-
+  
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
     
   parse_options(cfg, argc, argv);
@@ -593,7 +589,7 @@ int main (int argc, char** argv, char** envp)
   if (cfg->password == NULL)
     {
       if (cfg->verbose)
-		xlog(LOG_INFO, "No password specified, prompting for one.\n");
+	xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
       cfg->password = getpass("Password: ");
       cfg->free_pwd = TRUE;
@@ -605,13 +601,20 @@ int main (int argc, char** argv, char** envp)
   if (cfg->proxy != NULL)
     check_default_arg(&cfg->proxy_port, "8080");
 
-  retcode = access (cfg->pppd_path, X_OK);
+  retcode = euidaccess (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to access ppp binary.\n");
       xfree_cfg();
       return EXIT_FAILURE;
     }
+
+  if (cfg->quiet_mode && cfg->verbose)
+    {
+      xlog(LOG_ERROR, "Cannot use verbose and quiet mode together. Using verbose options\n");
+      cfg->quiet_mode = 0;
+    }
+  
 
   /* catch signal */
   memset(&saction, 0, sizeof(struct sigaction));
@@ -641,10 +644,10 @@ int main (int argc, char** argv, char** envp)
       retcode = proxy_connect(sockfd);
   
       if (retcode < 0)
-		{
-		  xfree_cfg();
-		  return EXIT_FAILURE;
-		}
+	{
+	  xfree_cfg();
+	  return EXIT_FAILURE;
+	}
     }
   
   retcode = init_tls_session(sockfd, &tls); 

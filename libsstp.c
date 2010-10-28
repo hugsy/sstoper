@@ -1,3 +1,4 @@
+#define _GNU_SOURCE 1
 #define _POSIX_SOURCE 1
 
 #include <string.h>
@@ -24,11 +25,9 @@
 #include "libsstp.h"
 #include "sstpclient.h"
 
-
 #if defined __linux__
 #include <pty.h>
 #endif 
-
 
 
 /**
@@ -66,7 +65,6 @@ void generate_guid(char data[])
  */
 void set_client_status(uint8_t status)
 {
-  /* assert(status) */
   if (ctx->state == status)
     return;
   
@@ -91,7 +89,7 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
   if (header->version != SSTP_VERSION)
     {
       if (cfg->verbose)
-	xlog(LOG_ERROR, "Invalid version (%#x)", header->version);
+	xlog(LOG_ERROR, "Invalid version (%#x)\n", header->version);
       return FALSE;
     }
 
@@ -99,7 +97,7 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
       header->reserved != SSTP_CONTROL_PACKET)
     {
       if (cfg->verbose)
-		xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
+	xlog(LOG_ERROR, "Invalid packet type (%#x)\n", header->reserved);
       return FALSE;
     }
 
@@ -111,12 +109,15 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
   header->length = ntohs(header->length);
   if (header->length != recv_len)
     {
-      if (cfg->verbose > 2)
-	xlog(LOG_DEBUG, "Unmatching length: annonced %lu, received %lu\n",
-	     header->length, recv_len);
-      return FALSE;
+      if ( header->reserved == SSTP_CONTROL_PACKET)
+	{
+	  if (cfg->verbose > 2)
+	    xlog(LOG_DEBUG, "Unmatching length: annonced %lu, received %lu\n",
+		 header->length, recv_len);
+      
+	  return FALSE;
+	}
     }
-
 
   return TRUE;
 }
@@ -151,10 +152,10 @@ int https_session_negociation()
   
   rbytes = snprintf(buf, 1024,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
-		    "Host: %s\r\n" /* <-- note: le hostname jamais valide cote serveur */
-		    "SSTPCORRELATIONID: %s\r\n" /* <-- note: on peut mettre nawak ici */
+		    "Host: fuuuuuuuuu%s\r\n" /* <-- note: le hostname jamais valide cote serveur */
+		    "SSTPCORRELATIONID: fuuuuuuuu%s\r\n" /* <-- note: on peut mettre nawak ici */
 		    "Content-Length: %llu\r\n"
-		    /* "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n" */
+		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
@@ -228,11 +229,13 @@ void sstp_init()
  */
 void sstp_loop()
 {
-  size_t read_max_size;
+  /* size_t read_max_size; */
   fd_set rcv_fd;
   int retcode;
+  uint16_t msg_type = 0;
 
-  read_max_size = gnutls_record_get_max_size(tls);
+  
+  /* read_max_size = gnutls_record_get_max_size(tls); */
   
   ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
   ctx->retry = 5;
@@ -251,7 +254,7 @@ void sstp_loop()
       FD_ZERO(&rcv_fd);
       
       if (ctx->pppd_pid > 0)
-		FD_SET(0, &rcv_fd);
+	FD_SET(0, &rcv_fd);
       
       FD_SET(sockfd, &rcv_fd);   
 	  
@@ -265,23 +268,25 @@ void sstp_loop()
       
       if (ctx->pppd_pid > 0 && FD_ISSET(0, &rcv_fd)) 
 	{
-	  char rbuffer[read_max_size];
+	  char rbuffer[PPP_MAX_MTU];
 	  ssize_t rbytes = -1;
-	  rbytes = read(0, rbuffer, read_max_size);
+
+	  rbytes = read(0, rbuffer, PPP_MAX_MTU);
 	  if (rbytes > 0)
 	    send_sstp_data_packet(rbuffer, rbytes);
 	}
       
       if (FD_ISSET(sockfd, &rcv_fd)) 
 	{
-	  char rbuffer[read_max_size];
+	  char rbuffer[PPP_MAX_MRU];
 	  ssize_t rbytes;
 	  
-	  rbytes = gnutls_record_recv (tls, rbuffer, read_max_size);
+	  rbytes = gnutls_record_recv (tls, rbuffer, PPP_MAX_MRU);
 	  if (rbytes < 0)
 	    {
 	      retcode = rbytes;
-	      xlog(LOG_ERROR, "sstp_loop: gnutls_record_recv: %s\n", gnutls_strerror(rbytes));
+	      xlog(LOG_ERROR, "sstp_loop: gnutls_record_recv: %s\n",
+		   gnutls_strerror(rbytes));
 	    }
 	  
 	  else if (rbytes == 0) 
@@ -291,7 +296,8 @@ void sstp_loop()
 		  
 	  else 
 	    {
-	      xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
+	      if (!cfg->quiet_mode)
+		xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
 	      retcode = sstp_decode(rbuffer, rbytes);
 	    }
 		  
@@ -311,11 +317,12 @@ void sstp_loop()
       if (retcode)
 	xlog(LOG_INFO, "Failed to quit pppd, retcode %d\n", retcode);
     }
-      
-  if (cfg->verbose)
-    xlog(LOG_INFO, "Sending SSTP_MSG_CALL_DISCONNECT message.\n");
+
+  msg_type = ctx->flags & REMOTE_DISCONNECTION ? SSTP_MSG_CALL_DISCONNECT_ACK : SSTP_MSG_CALL_DISCONNECT; 
   
-  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT, NULL, 0, 0);
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Sending %s message.\n", control_messages_types_str[msg_type]);
+  send_sstp_control_packet(msg_type, NULL, 0, 0);
   
   free(chap_ctx);
   free(ctx);
@@ -362,7 +369,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       sstp_control_header_t* control_header;
       uint16_t control_type, control_num_attributes;
       void* attribute_ptr;
-
       
       control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       control_type = ntohs( control_header->message_type );
@@ -429,14 +435,16 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	case SSTP_MSG_CALL_ABORT:
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
+	  
+	  set_client_status(CLIENT_CALL_DISCONNECTED);
 	  break;
 	  
 	case SSTP_MSG_CALL_DISCONNECT:
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
-	  send_sstp_control_packet(SSTP_MSG_CALL_DISCONNECT_ACK, NULL, 0, 0);
-	  ctx->state = CLIENT_CALL_DISCONNECTED;
+	  ctx->flags |= REMOTE_DISCONNECTION;
+	  set_client_status(CLIENT_CALL_DISCONNECTED);
 	  break;
 
 	case SSTP_MSG_ECHO_REQUEST:
@@ -449,12 +457,11 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  alarm(0);
 	  break;
 	  
-
 	case SSTP_MSG_CALL_CONNECT_REQUEST:
 	case SSTP_MSG_CALL_DISCONNECT_ACK:
 	default :
 	  xlog(LOG_ERROR, "Client cannot handle type %#x\n", control_type);
-	  ctx->state = CLIENT_CALL_DISCONNECTED;
+	  set_client_status(CLIENT_CALL_DISCONNECTED);
 	  return -1;
 	}
       
@@ -510,10 +517,9 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      send_sstp_control_packet(SSTP_MSG_ECHO_REQUEST, NULL, 0, 0);
 	    }
 	}
-      
-      retcode = write(1, data_ptr, sstp_length);
 
-      if (retcode < 0) 
+      retcode = write(1, data_ptr, sstp_length);
+      if (retcode < 0)
 	{
 	  xlog(LOG_ERROR, "write: %s\n", strerror(retcode));
 	  return -1;
@@ -631,7 +637,8 @@ void sstp_send(void* data, size_t data_length)
       exit(sbytes);
     }
 
-  xlog(LOG_INFO, " --> %lu bytes\n", sbytes);
+  if (!cfg->quiet_mode)
+    xlog(LOG_INFO, " --> %lu bytes\n", sbytes);
   
 }
 
@@ -1148,20 +1155,21 @@ int sstp_fork()
 
   pppd_path = cfg->pppd_path;
   i = 0;
-    
+  
   pppd_args[i++] = "pppd"; 
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
   pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
-   
+  pppd_args[i++] = "mru"; pppd_args[i++] = "1412";
+
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";
   pppd_args[i++] = cfg->password;
 
- 
+
   if (cfg->logfile != NULL) 
     {
       pppd_args[i++] = "logfile";
@@ -1216,10 +1224,10 @@ int sstp_fork()
 
       
       if (execv (pppd_path, pppd_args) == -1)
-		{
-		  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
-		  return -1;
-		}
+	{
+	  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
+	  return -1;
+	}
     }
 
   else 
