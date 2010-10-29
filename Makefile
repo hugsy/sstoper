@@ -34,7 +34,7 @@ ifeq ($(DEBUG), 1)
 ARGS		+=	-vvv -l ./pppd_log
 endif
 
-.PHONY : clean all valgrind release snapshot test cvs
+.PHONY : clean all valgrind release snapshot test
 
 .c.o :
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -67,8 +67,3 @@ uninstall: clean
 
 test:   $(BIN)
 	./$(BIN) $(ARGS)
-
-cvs:	clean
-	test -d ~/cvs/trucs/sstoper/ && \
-	cp -r * ~/cvs/trucs/sstoper/ && \
-	cd ~/cvs/trucs/sstoper/ && cvs ci -m "$(shell date): Merge HSC CVS : $(shell git log -n 1)"
