@@ -1,4 +1,4 @@
-SSToPer, *nix SSTP client
+SSToPer, Linux SSTP client
 
 
 What is SSTP ?
@@ -16,30 +16,38 @@ http://en.wikipedia.org/wiki/Secure_Socket_Tunneling_Protocol
 What is SSToPer ?
 --------------------
 
-A *nix implementation of the SSTP client, used to establish VPN communication
-with MS server (2008 and R2). Since SSTP is only a wrapper over PPP
-communication, pppd (http://ppp.samba.org/) MUST be installed with the synchronous
-HDLC serial encoding capability enabled.
+A Linux implementation for SSTP client, which is embedded by default in
+Microsoft Windows Vista and Seven, used to establish VPN communication 
+with Microsoft Server 2008 and above. Since SSTP is only a wrapper over PPP
+communication, pppd (http://ppp.samba.org/) MUST be installed with the
+synchronous HDLC serial encoding capability enabled.
 
 
 Features:
 ---------
 
-- Establishes IP VPN encapsulated inside SSL packets (so it should escape proxies)
-- IPv4 support (v6 to be tested)
-- HMAC-256 support (HMAC-160 to be tested)
-- Provides a Wireshark SSTP dissector to analyse SSTP behaviour
-- 
+- Establishes PPP based VPN through SSTP
+- Proxy 
+- HMAC-256 support
+- Wireshark SSTP dissector provided to analyse SSTP behaviour
 
 
 Pre-requisites:
 ---------------
 
-- libcrypto library (for hmac.h)
-- lgnutls library (for gnutls.h and other)
-- libbsd library (for util.h)
+- libcrypto (for hmac.h)
+- libgnutls (for gnutls.h and other)
+- libbsd (for util.h)
 - HDLC-sync capable pppd must be installed
 - root privileges
+
+
+Todo:
+-----
+
+- IPv6 support (should be working, to test)
+- HMAC-160 support (should be working, to test)
+- Certification validation
 
 
 
@@ -61,8 +69,8 @@ Installing Wireshark SSTP dissector:
 }}}
 
 
-Session example:
-----------------
+SSTP Session example:
+---------------------
 - first you need your server PEM-formatted CA file. It can usually be obtained
   like this:
   -> Go to http://<server>/certsrv
@@ -73,7 +81,7 @@ Session example:
 - un-tar and compile sstoper
 {{{
 $ tar xf sstoper.tar.gz
-$ cd sstoper && make -f Makefile # or just make
+$ cd sstoper && make 
 }}}
 
 - execute
@@ -81,19 +89,27 @@ $ cd sstoper && make -f Makefile # or just make
 $ sudo ./sstoper -s server -c server.crt -U user -P pass
 [!] Using default value: 443.
 [!] Using default value: /usr/sbin/pppd.
-Connecting to vpn.tweety.looney:443     [OK]
- --> 244 bytes
-<-- 123 bytes
-[SSTP communication]
+Connecting to vpn.tweety.looney:443
+2010-10-31 12:04:39  [!] Using default value: 443
+2010-10-31 12:04:39  [!] Using default value: /usr/sbin/pppd
+Connecting to vpn.tweety.looney:443 
+SSTP link established
+
 (Hit Ctrl-C to close connection)
-^CSIG: Closing connection
-End of TLS connection. Reason: 2.
-Freeing regions.
+
+^C2010-10-31 12:13:00  [-] sstp_loop: Interrupted system call
+Waiting for /usr/sbin/pppd process (PID:6226) to end
 $ 
 }}}
+
+Incrementing verbose option (0-3) will display more connection events.
+
 
 Actually working on Linux, other system to be supported.
    
 Comments/Bugs:
 --------------
-Please send me back comments and bugs to <ca __AT__ hsc __DOT__ fr>
+Please send me back comments and bugs to <ca __AT__ hsc __DOT__ fr> with
+backtrace (using sstoper -vvv options) and/or an strace output of the bug.
+
+Thanks !

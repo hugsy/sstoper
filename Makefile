@@ -27,7 +27,7 @@ endif
 
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
-BIN			=	sstoper
+BIN		=	sstoper
 
 ARGS		=	-s 192.168.111.195 -c ~/tmp/certnew.cer -U test-sstp -P Hello1234
 ifeq ($(DEBUG), 1)

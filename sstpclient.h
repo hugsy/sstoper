@@ -35,6 +35,7 @@ enum
 typedef struct 
 {
   int verbose;
+  int daemon;
   char* server;
   char* port;  
   char* ca_file;
@@ -46,7 +47,6 @@ typedef struct
   char* domain;
   char* proxy;
   char* proxy_port;
-  int quiet_mode;
 } sstp_config;
 
 gnutls_session_t tls;

@@ -54,7 +54,8 @@ void generate_guid(char data[])
   data4 = (rand() + 1) * (sizeof(uint32_t) * 8);
   snprintf(data, 38, "{%.4X-%.2X-%.2X-%.4X}", data1, data2, data3, data4);
 
-  if (cfg->verbose) xlog(LOG_INFO, "Using GUID %s\n", data);
+  if (cfg->verbose > 1)
+    xlog(LOG_INFO, "Using GUID %s\n", data);
 }
 
 
@@ -101,13 +102,8 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
       return FALSE;
     }
 
-  /*
-   * note : bug server sstp ou ppp
-   * le 1er packet ppp recu du serveur possede une taille de paquet differente de celle
-   * annonce dans le header sstp -> test de la taille echoue 
-   */
   header->length = ntohs(header->length);
-  if (header->length != recv_len)
+  if (header->length > recv_len)
     {
       if ( header->reserved == SSTP_CONTROL_PACKET)
 	{
@@ -149,10 +145,12 @@ int https_session_negociation()
   memset(guid, 0, 39);
   memset(buf, 0, 1024);
   generate_guid(guid);
-  
+
+  sess = (sstp_session_t*) xmalloc(sizeof(sstp_session_t));
+    
   rbytes = snprintf(buf, 1024,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
-		    "Host: fuuuuuuuuu%s\r\n" /* <-- note: le hostname jamais valide cote serveur */
+		    "Host: fuuuuuuuuu%s\r\n" /* note: le hostname jamais valide cote serveur */
 		    "SSTPCORRELATIONID: fuuuuuuuu%s\r\n" /* <-- note: on peut mettre nawak ici */
 		    "Content-Length: %llu\r\n"
 		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
@@ -172,14 +170,20 @@ int https_session_negociation()
       
   if (rbytes > 0)
     {
-      xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
+      if (cfg->verbose > 1) 
+	{
+	  xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
 
-      if (cfg->verbose > 2)
-	xlog(LOG_DEBUG , "Received: %s\n", buf);
+	  if (cfg->verbose > 2)
+	    xlog(LOG_DEBUG , "Received: %s\n", buf);
+	}
+      
+      sess->rx_bytes += rbytes;
+      
     }
   else if (rbytes == 0)
     {
-      xlog(LOG_INFO , "Connection closed by beer.\n");
+      xlog(LOG_INFO , "Connection closed.\n");
       return -1;
     }
   else 
@@ -215,6 +219,8 @@ void sstp_init()
   free(attribute);
 
   alarm(ctx->negociation_timer.tv_sec);
+  ctx->flags |= NEGOCIATION_TIMER_RAISED;
+  
   set_client_status(CLIENT_CONNECT_REQUEST_SENT);
 
 }
@@ -229,16 +235,14 @@ void sstp_init()
  */
 void sstp_loop()
 {
-  /* size_t read_max_size; */
   fd_set rcv_fd;
   int retcode;
   uint16_t msg_type = 0;
 
-  
-  /* read_max_size = gnutls_record_get_max_size(tls); */
+  gettimeofday(&sess->tv_start, NULL);
   
   ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
-  ctx->retry = 5;
+  ctx->retry = SSTP_MAX_INIT_RETRY;
   ctx->state = CLIENT_CALL_DISCONNECTED;
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
@@ -296,8 +300,10 @@ void sstp_loop()
 		  
 	  else 
 	    {
-	      if (!cfg->quiet_mode)
+	      if (cfg->verbose > 1)
 		xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
+
+	      sess->rx_bytes += rbytes;
 	      retcode = sstp_decode(rbuffer, rbytes);
 	    }
 		  
@@ -323,8 +329,17 @@ void sstp_loop()
   if (cfg->verbose)
     xlog(LOG_INFO, "Sending %s message.\n", control_messages_types_str[msg_type]);
   send_sstp_control_packet(msg_type, NULL, 0, 0);
+
+  gettimeofday(&sess->tv_end, NULL);
+
+  if (cfg->verbose)
+    {
+      xlog(LOG_INFO, "SSTP connection time: %lu sec\n", (sess->tv_end.tv_sec - sess->tv_start.tv_sec));
+      xlog(LOG_INFO, "Sent %lu bytes, received %lu bytes\n", sess->rx_bytes, sess->tx_bytes);
+    }
   
   free(chap_ctx);
+  free(sess);
   free(ctx);
 }
 
@@ -353,7 +368,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 
   is_control = is_control_packet(sstp_header);
   
-  if (cfg->verbose)
+  if (cfg->verbose > 1)
     xlog(LOG_INFO, "\t-> %s packet\n", is_control ? "Control" : "Data");
 
   sstp_length -= sizeof(sstp_header_t);
@@ -392,7 +407,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       
       
       /* parsing control header */
-      if (cfg->verbose)
+      if (cfg->verbose > 1)
 	{
 	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
 	       control_messages_types_str[control_type], control_type);
@@ -423,8 +438,10 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 
 	  if ( ctx->retry ) 
 	    {
-	      if (cfg->verbose) xlog(LOG_INFO, "Retrying ... (%d/%d)\n",
-				     5-ctx->retry, 5);
+	      if (cfg->verbose)
+		xlog(LOG_INFO, "Retrying ... (%d/%d)\n",
+		     SSTP_MAX_INIT_RETRY - ctx->retry, SSTP_MAX_INIT_RETRY);
+	      
 	      ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
 	      ctx->retry--;
 	      sstp_init();
@@ -455,6 +472,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	case SSTP_MSG_ECHO_REPONSE:
 	  if (ctx->state != CLIENT_CALL_CONNECTED) return -1;
 	  alarm(0);
+	  ctx->flags &= ~HELLO_TIMER_RAISED;
 	  break;
 	  
 	case SSTP_MSG_CALL_CONNECT_REQUEST:
@@ -510,8 +528,11 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      free(attribute);
 	      
 	      /* and set hello timer */
-	      alarm(ctx->hello_timer.tv_sec);
+	      ctx->flags |= HELLO_TIMER_RAISED;
 	      set_client_status(CLIENT_CALL_CONNECTED);
+	      alarm(ctx->hello_timer.tv_sec);
+	      
+	      xlog(LOG_INFO, "SSTP link established\n");      
 
 	      /* send an sstp ping, response will stop the alarm */
 	      send_sstp_control_packet(SSTP_MSG_ECHO_REQUEST, NULL, 0, 0);
@@ -581,7 +602,7 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 	}
       
       /* parsing attribute header */
-      if (cfg->verbose)
+      if (cfg->verbose > 1)
 	{
 	  xlog(LOG_INFO, "\t\t--> attr_id\t%s (%#.2x)\n",attr_types_str[attribute_id], attribute_id);
 	  xlog(LOG_INFO, "\t\t--> len\t\t%d bytes\n", attribute_length);
@@ -637,7 +658,9 @@ void sstp_send(void* data, size_t data_length)
       exit(sbytes);
     }
 
-  if (!cfg->quiet_mode)
+  sess->tx_bytes += sbytes;
+  
+  if (cfg->verbose > 1)
     xlog(LOG_INFO, " --> %lu bytes\n", sbytes);
   
 }
@@ -731,7 +754,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   control_header.message_type = htons(msg_type);
   control_header.num_attributes = htons(attribute_number);
 
-  if (cfg->verbose)
+  if (cfg->verbose > 1)
     {
       xlog(LOG_INFO, "\t-> Control packet\n");
       xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
@@ -753,12 +776,12 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
       sstp_attribute_header_t* cur_attr = (sstp_attribute_header_t*)attr_ptr;
       uint16_t plen = ntohs(cur_attr->packet_length);
 
-      if (cfg->verbose)
+      if (cfg->verbose > 1)
 	{
 	  xlog(LOG_INFO, "\t\t--> Attribute %d\n", i);
 	  xlog(LOG_INFO, "\t\t--> type: %s (%x)\n",
 	       attr_types_str[cur_attr->attribute_id], cur_attr->attribute_id);
-	  xlog(LOG_INFO, "\t\t--> length: %d\n", cur_attr->packet_length);
+	  xlog(LOG_INFO, "\t\t--> length: %d\n", plen);
 	}
       
       memcpy(data_ptr, attr_ptr, plen);
@@ -832,7 +855,8 @@ int crypto_set_binding(void* data)
 
   /* Disable negociation timer */
   alarm(0);
-  
+  ctx->flags &= ~NEGOCIATION_TIMER_RAISED;
+    
   /* Setting crypto properties */
   req = (sstp_attribute_crypto_bind_req_t*) data;
 
@@ -1021,7 +1045,7 @@ int crypto_set_cmac()
 
   
   /* Verbose output displays brief crypto information */
-  if (cfg->verbose)
+  if (cfg->verbose > 1)
     {
       xlog(LOG_INFO, "\t\t--> hash algo\t%s (%#.2x)\n",
 	   crypto_req_attrs_str[ctx->hash_algorithm], ctx->hash_algorithm);
@@ -1084,6 +1108,7 @@ int crypto_set_cmac()
 
   /* disable negociation timer */
   alarm(0);
+  ctx->flags &= ~NEGOCIATION_TIMER_RAISED;
   
   return 0;
 }
@@ -1162,8 +1187,9 @@ int sstp_fork()
   pppd_args[i++] = "noauth";
   pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
   pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "nodeflate";
   pppd_args[i++] = "mru"; pppd_args[i++] = "1412";
-
+  
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";
@@ -1186,6 +1212,17 @@ int sstp_fork()
  
   pppd_args[i++] = NULL;
 
+  if (cfg->verbose > 2)
+    {
+      char *ptr;
+      i = 0;
+
+      xlog(LOG_INFO, "execv-ing ");
+      while ((ptr = pppd_args[i++]))
+	xlog(LOG_INFO, "%s ", ptr);
+      xlog(LOG_INFO, "\n");
+    }
+  
   memset(&pty, 0, sizeof(struct termios));
   pty.c_cc[VMIN] = 1;
   pty.c_cc[VTIME] = 0;

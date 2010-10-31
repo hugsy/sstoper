@@ -20,11 +20,11 @@
 #define SSTP_MAX_ATTR 256
 #define SSTP_NEGOCIATION_TIMER 60
 #define SSTP_PING_TIMER 30
+#define SSTP_MAX_INIT_RETRY 5
 #define SSTP_SEED_PREFIX "SSTP inner method derived CMK"
 #define SSTP_CMAC_SEED_PREFIX_LEN  29
 #define SHA1_HASH_LEN 0x0014
 #define SHA256_HASH_LEN 0x0020
-
 
 #define PPP_MAX_MTU 4096
 #define PPP_MAX_MRU 4096
@@ -217,9 +217,9 @@ typedef struct __sstp_attribute_status_info
 
 enum _flags 
   {
-    REMOTE_DISCONNECTION,
-    NEGOCIATION_TIMER_RAISED,
-    HELLO_TIMER_RAISED,
+    REMOTE_DISCONNECTION = 0x1,
+    NEGOCIATION_TIMER_RAISED = 0x2,
+    HELLO_TIMER_RAISED = 0x4,
   };
 
 /* sstp client context */
@@ -235,10 +235,22 @@ typedef struct __sstp_context
   uint32_t nonce[8];
   uint32_t certhash[8];
   uint32_t cmk[8];
-  uint32_t cmac[8];
+  uint32_t cmac[8]; 
 } sstp_context_t;
 
 sstp_context_t* ctx;
+
+
+typedef struct __sstp_session
+{
+  unsigned long rx_bytes;
+  unsigned long tx_bytes;
+  struct timeval tv_start;
+  struct timeval tv_end;
+} sstp_session_t;
+
+sstp_session_t* sess;
+
 
 typedef struct __chap_context 
 {

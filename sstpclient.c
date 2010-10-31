@@ -146,7 +146,7 @@ void usage(char* name, int retcode)
 	  "\t-m, --proxy=PROXY\t\t\t\tSpecify proxy location\n"
 	  "\t-n, --proxy-port=PORT\t\t\t\tSpecify proxy port\n"
 	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"
-	  "\t-q, --quiet\t\t\t\t\tQuiet prints minimalist infos\n"
+	  "\t-D, --daemon\t\t\t\t\tStart as daemon\n"
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  PROGNAME, VERSION,
@@ -170,7 +170,6 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
   const struct option long_opts[] = {
     { "help", 0, 0, 'h' },
     { "verbose", 0, 0, 'v' },
-    { "quiet", 0, 0, 'q' },
     { "server", 1, 0, 's' },
     { "port", 1, 0, 'p' },
     { "ca-file", 1, 0, 'c' },
@@ -181,6 +180,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
     { "domain", 1, 0, 'd' },
     { "proxy", 1, 0, 'm' },
     { "proxy-port", 1, 0, 'n' },
+    { "daemon", 0, 0, 'D' },
     { 0, 0, 0, 0 } 
   };
 
@@ -189,7 +189,9 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
       curopt = -1;
       curopt_idx = 0;
 
-      curopt = getopt_long (argc, argv, "hvqs:p:c:U:P:x:l:d:m:n:", long_opts, &curopt_idx);
+      curopt = getopt_long (argc, argv,
+			    "hvs:p:c:U:P:x:l:d:m:n:D",
+			    long_opts, &curopt_idx);
 
       if (curopt == -1) break;
       
@@ -204,9 +206,9 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 	case 'x': cfg->pppd_path = optarg; break;	  
 	case 'l': cfg->logfile = optarg; break;
 	case 'd': cfg->domain = optarg; break;
+	case 'D': cfg->daemon = 1; break;
 	case 'm': cfg->proxy = optarg; break;
 	case 'n': cfg->proxy_port = optarg; break;
-	case 'q': cfg->quiet_mode = 1; break;
 	case 'h':
 	  usage (argv[0], EXIT_SUCCESS);
 	case '?':
@@ -251,7 +253,7 @@ void check_default_arg(char** argument, char* default_value)
 
 
 /**
- * Initiates TCP connection to `hostname` on port `port`
+ * Initiates TCP connection to hostname on port port
  *
  * @return a socket (fd > 2) on success, a negative value on failure
  */
@@ -259,7 +261,6 @@ sock_t init_tcp()
 {
   sock_t sock;
   struct addrinfo hostinfo, *res, *ll;
-
   char *host, *port;
   
   memset(&hostinfo, 0, sizeof(struct addrinfo));
@@ -287,7 +288,7 @@ sock_t init_tcp()
     {
       xlog(LOG_INFO, "getaddrinfo failed\n");
       if (cfg->verbose > 2)
-		xlog(LOG_DEBUG, "%s\n", strerror(errno));
+	xlog(LOG_DEBUG, "%s\n", strerror(errno));
       
       freeaddrinfo(res);
       return -1;
@@ -296,32 +297,35 @@ sock_t init_tcp()
   for (ll = res; ll; ll = ll->ai_next)
     {
       sock = socket(ll->ai_family,
-					ll->ai_socktype,
-					ll->ai_protocol);
+		    ll->ai_socktype,
+		    ll->ai_protocol);
     
       if (sock == -1)
-		continue;
+	continue;
     
       if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
-		break;
+	break;
       
       close(sock);
     }
   
-  if (ll == NULL)
+  if (!ll)
     {
       xlog(LOG_INFO, "connect failed\n");
       if (errno && cfg->verbose > 2)
-		xlog(LOG_DEBUG, "%s\n", strerror(errno));
-      
-      freeaddrinfo(res);
-      return -1;
+	xlog(LOG_DEBUG, "%s\n", strerror(errno));
+      sock = -1;
     }
-
-  xlog(LOG_INFO, "Connected");
-  if (cfg->verbose) xlog(LOG_INFO, " (%ld)", sock);
-  xlog(LOG_INFO, "\n");
-
+  else 
+    {
+      if (cfg->verbose)
+	{
+	  xlog(LOG_INFO, "Connected\n");
+	  if (cfg->verbose > 2)
+	    xlog(LOG_DEBUG, "Using fd %ld\n", sock);
+	}
+    }
+  
   freeaddrinfo(res);
  
   return sock;
@@ -467,7 +471,7 @@ void end_tls_session(int reason)
   gnutls_global_deinit();
 
   if (cfg->verbose)
-    xlog(LOG_INFO, "End of connection. Reason: %d.\n", reason);
+    xlog(LOG_INFO, "End of connection. Reason: %s.\n", reason ? "Failure" : "Success");
 }
 
 
@@ -520,6 +524,14 @@ void sighandle(int signum)
     {
     case SIGALRM:
       xlog(LOG_ERROR, "Timer has expired, disconnecting\n");
+      if(cfg->verbose)
+	{
+	  if (ctx->flags & HELLO_TIMER_RAISED)
+	    xlog(LOG_ERROR, "HELLO_TIMER_RAISED flag raised (SSTP server did not Pong)\n");
+	  if (ctx->flags & NEGOCIATION_TIMER_RAISED)
+	    xlog(LOG_ERROR, "NEGOCIATION_TIMER_RAISED flag raised\n");
+	}
+      
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
 
@@ -601,7 +613,7 @@ int main (int argc, char** argv, char** envp)
   if (cfg->proxy != NULL)
     check_default_arg(&cfg->proxy_port, "8080");
 
-  retcode = euidaccess (cfg->pppd_path, X_OK);
+  retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to access ppp binary.\n");
@@ -609,12 +621,8 @@ int main (int argc, char** argv, char** envp)
       return EXIT_FAILURE;
     }
 
-  if (cfg->quiet_mode && cfg->verbose)
-    {
-      xlog(LOG_ERROR, "Cannot use verbose and quiet mode together. Using verbose options\n");
-      cfg->quiet_mode = 0;
-    }
-  
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Verbose level: %d\n", cfg->verbose);
 
   /* catch signal */
   memset(&saction, 0, sizeof(struct sigaction));
@@ -626,8 +634,18 @@ int main (int argc, char** argv, char** envp)
   sigaction(SIGALRM, &saction, NULL);
   sigaction(SIGCHLD, &saction, NULL);
 
-
+  
   /* main starts here */
+  if (cfg->verbose && cfg->daemon)
+    xlog(LOG_INFO, "Starting daemon (send SIGINT to close properly)\n");
+
+  if (daemon(0, 0) < 0)
+    {
+      xlog(LOG_ERROR, "daemon failed: %s\n", strerror(errno));
+      xfree_cfg();
+      return EXIT_FAILURE;
+    }
+  
   if (cfg->verbose)
     xlog (LOG_INFO, "Starting %s as %d\n", argv[0], getpid());
 
@@ -653,19 +671,19 @@ int main (int argc, char** argv, char** envp)
   retcode = init_tls_session(sockfd, &tls); 
   if (retcode < 0)
     {
-      xlog(LOG_ERROR, "TLS session initialization has failed, leaving...\n");
+      xlog(LOG_ERROR, "TLS session initialization has failed, leaving.\n");
       xfree_cfg();
       return EXIT_FAILURE;
     }
 
   
   if (cfg->verbose)
-    xlog(LOG_INFO, "Performing HTTPS transaction\n");
+    xlog(LOG_INFO, "Initiating HTTPS negociation\n");
   
   retcode = https_session_negociation();  
   if (retcode < 0)
     {
-      xlog(LOG_ERROR, "An error occured in HTTPS negocation, leaving\n");
+      xlog(LOG_ERROR, "An error occured in HTTPS negociation, leaving.\n");
       end_tls_session(EXIT_FAILURE);
       xfree_cfg();
       return EXIT_FAILURE;
@@ -677,9 +695,6 @@ int main (int argc, char** argv, char** envp)
   
   sstp_loop();
 
-  if (cfg->verbose)
-    xlog(LOG_INFO, "SSTP dialog ends successfully\n");
-  
   end_tls_session(EXIT_SUCCESS);
   xfree_cfg();
   return EXIT_SUCCESS;
