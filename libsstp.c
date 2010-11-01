@@ -216,7 +216,7 @@ void sstp_init()
   send_sstp_control_packet(SSTP_MSG_CALL_CONNECT_REQUEST, attribute,
 			   1, attribute_len);
 
-  free(attribute);
+  xfree(attribute);
 
   alarm(ctx->negociation_timer.tv_sec);
   ctx->flags |= NEGOCIATION_TIMER_RAISED;
@@ -338,9 +338,9 @@ void sstp_loop()
       xlog(LOG_INFO, "Sent %lu bytes, received %lu bytes\n", sess->rx_bytes, sess->tx_bytes);
     }
   
-  free(chap_ctx);
-  free(sess);
-  free(ctx);
+  xfree(chap_ctx);
+  xfree(sess);
+  xfree(ctx);
 }
 
 
@@ -525,7 +525,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      
 	      send_sstp_control_packet(SSTP_MSG_CALL_CONNECTED, attribute, 1, attribute_len);
 	      
-	      free(attribute);
+	      xfree(attribute);
 	      
 	      /* and set hello timer */
 	      ctx->flags |= HELLO_TIMER_RAISED;
@@ -537,6 +537,12 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	      /* send an sstp ping, response will stop the alarm */
 	      send_sstp_control_packet(SSTP_MSG_ECHO_REQUEST, NULL, 0, 0);
 	    }
+
+	  else if (chap_handshake_code == 0x04 )
+	    {
+	      xlog(LOG_ERROR, "PPP Authentication failure\n");
+	    }
+	  
 	}
 
       retcode = write(1, data_ptr, sstp_length);
@@ -694,7 +700,7 @@ void send_sstp_packet(uint8_t type, void* data, size_t data_length)
   
   sstp_send(packet, total_length);
   
-  free(packet);
+  xfree(packet);
 }
 
 
@@ -793,7 +799,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   /* yield to lower */
   send_sstp_packet(SSTP_CONTROL_PACKET, data, control_length);
 
-  free(data);
+  xfree(data);
 }
 
 
@@ -1040,8 +1046,8 @@ int crypto_set_cmac()
   memcpy(ctx->cmk, cmk, 32);
   memcpy(ctx->cmac, cmac, 32);
 
-  free(cmk);
-  free(cmac);
+  xfree(cmk);
+  xfree(cmac);
 
   
   /* Verbose output displays brief crypto information */
@@ -1138,7 +1144,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
       return -1;
     }
 
-  if (cfg->verbose)
+  if (cfg->verbose > 1)
     {  
       /* show attribute */
       xlog(LOG_INFO, "\t\t--> attr_ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
@@ -1181,11 +1187,11 @@ int sstp_fork()
   pppd_path = cfg->pppd_path;
   i = 0;
   
-  pppd_args[i++] = "pppd"; 
+  pppd_args[i++] = "pppd";
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
-  pppd_args[i++] = "sync";         /* <-- Thanks to Nicolas Collignon */
+  pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap";
   pppd_args[i++] = "nodeflate";
   pppd_args[i++] = "mru"; pppd_args[i++] = "1412";
@@ -1314,7 +1320,7 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
   if (HMAC(hmac(), key, 32, d, n, md, &mdlen) == NULL) 
     {
       xlog(LOG_ERROR, "Failed to compute HMAC\n");
-      free(md);
+      xfree(md);
       return NULL;
     }
   
@@ -1322,7 +1328,7 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
     {
       xlog(LOG_ERROR, "%s function didn't return valid data!\n",
 		   crypto_req_attrs_str[ctx->hash_algorithm]);
-      free(md);
+      xfree(md);
       return NULL;
     }
   

@@ -1,19 +1,22 @@
 #define _GNU_SOURCE 1
 #define _POSIX_SOURCE 1
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
-#include <netdb.h>
-#include <string.h>
 #include <inttypes.h>
+#include <netdb.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <termios.h>
 #include <time.h>
+#include <unistd.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -106,15 +109,14 @@ void* xmalloc(size_t size)
 /**
  * Free configuration blokcs
  */
-void xfree_cfg() 
+void xfree(void* ptr)
 {
-  if (cfg->free_pwd)
-    {
-      free(cfg->password);
-      cfg->free_pwd = 0;
-    }
 
-  free(cfg);
+  if (ptr) 
+    free(ptr);
+  else
+    xlog(LOG_ERROR, "Trying to free NULL pointer\n");
+  
 }
 
 
@@ -143,8 +145,8 @@ void usage(char* name, int retcode)
 	  "\t-x, --pppd-path=/path/to/pppd\t\t\tpppd path\n"
 	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd in file\n"
 	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain\n"
-	  "\t-m, --proxy=PROXY\t\t\t\tSpecify proxy location\n"
-	  "\t-n, --proxy-port=PORT\t\t\t\tSpecify proxy port\n"
+	  "\t-m, --proxy=PROXYHOST\t\t\t\tSpecify proxy location\n"
+	  "\t-n, --proxy-port=PROXYPORT\t\t\t\tSpecify proxy port\n"
 	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"
 	  "\t-D, --daemon\t\t\t\t\tStart as daemon\n"
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
@@ -158,6 +160,69 @@ void usage(char* name, int retcode)
   exit(retcode);
 }
 
+
+/**
+ * Custom function to read password from /dev/tty.
+ *
+ * @param prompt : string to display for password
+ */
+int getpassword(const char* prompt)
+{
+  int fd, rbytes;
+  static char pwd[64];
+  struct termios orig, no_echo;
+
+  if (!isatty(STDIN_FILENO))
+    {
+      if (cfg->verbose)
+	xlog(LOG_INFO, "Can't be used outside of a tty\n");
+      return -1;
+    }
+
+  printf("%s", prompt);
+  fflush(stdout);
+
+  memset (pwd, 0, 64);
+  fd = open("/dev/tty", O_RDWR);
+
+  if (tcgetattr (fd, &orig) < 0)
+    return -1;
+  
+  no_echo = orig;
+  no_echo.c_lflag &= ~ECHO;
+  
+  if (tcsetattr (fd, TCSAFLUSH, &no_echo) < 0)
+    return -1;
+
+  rbytes = read(fd, pwd, 64);
+      
+  switch (rbytes)
+    {
+    case -1:
+      xlog(LOG_ERROR, "failed to read pwd: %s\n", strerror(errno));
+      break;
+
+    case 0:
+      xlog(LOG_ERROR, "EOF\n");
+      rbytes = -1;
+      break;
+
+    default:
+      pwd[rbytes-1] = '\0';
+      cfg->password = pwd;
+      rbytes = 0;
+      break;
+    }
+  
+  if (tcsetattr (fd, TCSAFLUSH, &orig) < 0)
+    return -1;
+  
+  close(fd);
+  printf("\n");
+  fflush(stdout);
+  
+  return rbytes;
+}
 
 /**
  * Parse options
@@ -318,12 +383,11 @@ sock_t init_tcp()
     }
   else 
     {
-      if (cfg->verbose)
-	{
-	  xlog(LOG_INFO, "Connected\n");
-	  if (cfg->verbose > 2)
-	    xlog(LOG_DEBUG, "Using fd %ld\n", sock);
-	}
+      xlog(LOG_INFO, "Connected\n");
+      
+      if (cfg->verbose > 2)
+	xlog(LOG_DEBUG, "Using fd %ld\n", sock);
+
     }
   
   freeaddrinfo(res);
@@ -373,8 +437,11 @@ int proxy_connect(int sockfd)
   if (strncmp(buffer, "HTTP/1.0 200", 12) == 0 || strncmp(buffer, "HTTP/1.1 200", 12) == 0)
     return 0;
 
-  xlog(LOG_ERROR, "Bad response from proxy\n");
-  
+  xlog(LOG_ERROR, "Bad response from proxy, closing.\n");
+
+  if ( shutdown(sockfd, SHUT_WR) || close(sockfd) )
+    xlog(LOG_ERROR, "proxy_connect: %s\n", strerror(errno));
+
   return -1;
 }
 
@@ -458,12 +525,12 @@ void end_tls_session(int reason)
     xlog(LOG_ERROR, "end_tls_session: %s\n", gnutls_strerror(retcode));
  
   retcode = shutdown(sockfd, SHUT_WR);
-  if (retcode < -1)
-    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
+  if (retcode < 0)
+    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
   
   retcode = close(sockfd);
-  if (retcode < -1)
-    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(retcode));
+  if (retcode < 0)
+    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
 
   gnutls_deinit(tls);
   gnutls_x509_crt_deinit (certificate);
@@ -471,7 +538,7 @@ void end_tls_session(int reason)
   gnutls_global_deinit();
 
   if (cfg->verbose)
-    xlog(LOG_INFO, "End of connection. Reason: %s.\n", reason ? "Failure" : "Success");
+    xlog(LOG_INFO, "End of TLS connection, reason: %s.\n", reason ? "Failure" : "Success");
 }
 
 
@@ -575,7 +642,7 @@ int main (int argc, char** argv, char** envp)
 #endif
 
   /* check  */
-  if (getuid() != 0) 
+  if (getuid()) 
     {
       xlog (LOG_ERROR, "pppd requires %s to be executed with root privileges.\n", argv[0]);
       usage(argv[0], EXIT_FAILURE);
@@ -593,31 +660,40 @@ int main (int argc, char** argv, char** envp)
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "%s is not readable.\n", cfg->ca_file);
-      xfree_cfg();
-      return EXIT_FAILURE;
+      goto end;
     }
 
-  cfg->free_pwd = FALSE;
-  if (cfg->password == NULL)
+  if (!cfg->password)
     {
       if (cfg->verbose)
 	xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
-      cfg->password = getpass("Password: ");
-      cfg->free_pwd = TRUE;
+      retcode = getpassword("Password: ");
+      
+      if (!cfg->password || retcode < 0)
+	{
+	  xlog(LOG_ERROR, "Failed to read password\n");
+	  if (errno && cfg->verbose > 2)
+	    xlog(LOG_ERROR, "errno: %s\n", strerror(errno));
+	  
+	  goto end;
+	}
     }
   
   check_default_arg(&cfg->port, "443");
   check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
 
-  if (cfg->proxy != NULL)
+  if (cfg->proxy)
     check_default_arg(&cfg->proxy_port, "8080");
-
+  if (cfg->proxy_port && !cfg->proxy)
+    xlog(LOG_INFO, "No PROXYHOST specified for PROXYPORT '%s'. Dropping.\n", cfg->proxy_port);
+  
   retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to access ppp binary.\n");
-      xfree_cfg();
+      goto end;
+      xfree(cfg);
       return EXIT_FAILURE;
     }
 
@@ -636,14 +712,16 @@ int main (int argc, char** argv, char** envp)
 
   
   /* main starts here */
-  if (cfg->verbose && cfg->daemon)
-    xlog(LOG_INFO, "Starting daemon (send SIGINT to close properly)\n");
-
-  if (daemon(0, 0) < 0)
+  if (cfg->daemon) 
     {
-      xlog(LOG_ERROR, "daemon failed: %s\n", strerror(errno));
-      xfree_cfg();
-      return EXIT_FAILURE;
+      if (cfg->verbose)
+	xlog(LOG_INFO, "Starting daemon (send SIGINT to close properly)\n");
+
+      if (daemon(0, 0) < 0)
+	{
+	  xlog(LOG_ERROR, "daemon failed: %s\n", strerror(errno));
+	  goto end;
+	}
     }
   
   if (cfg->verbose)
@@ -653,8 +731,7 @@ int main (int argc, char** argv, char** envp)
   if (sockfd < 0) 
     {
       xlog(LOG_ERROR, "TCP socket has failed, leaving...\n");
-      xfree_cfg();
-      return EXIT_FAILURE;
+      goto end;
     }
 
   if (cfg->proxy != NULL) 
@@ -662,18 +739,14 @@ int main (int argc, char** argv, char** envp)
       retcode = proxy_connect(sockfd);
   
       if (retcode < 0)
-	{
-	  xfree_cfg();
-	  return EXIT_FAILURE;
-	}
+	goto end;
     }
   
   retcode = init_tls_session(sockfd, &tls); 
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "TLS session initialization has failed, leaving.\n");
-      xfree_cfg();
-      return EXIT_FAILURE;
+      goto disco;
     }
 
   
@@ -684,9 +757,7 @@ int main (int argc, char** argv, char** envp)
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "An error occured in HTTPS negociation, leaving.\n");
-      end_tls_session(EXIT_FAILURE);
-      xfree_cfg();
-      return EXIT_FAILURE;
+      goto disco;
     }
     
 
@@ -695,7 +766,11 @@ int main (int argc, char** argv, char** envp)
   
   sstp_loop();
 
-  end_tls_session(EXIT_SUCCESS);
-  xfree_cfg();
-  return EXIT_SUCCESS;
+ disco:
+  retcode = !retcode ? EXIT_SUCCESS : EXIT_FAILURE; 
+  end_tls_session(retcode);
+  
+ end :
+  xfree(cfg);
+  return retcode;
 }

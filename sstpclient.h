@@ -41,7 +41,6 @@ typedef struct
   char* ca_file;
   char* username;
   char* password;
-  int free_pwd;
   char* logfile;
   char* pppd_path;
   char* domain;
@@ -60,8 +59,10 @@ extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__rest
 
 void xlog(int type, const char* fmt, ...); 
 void* xmalloc(size_t size);
+void xfree(void*);
+
 sock_t init_tcp();
 int init_tls_session();
 int check_tls_session();
 void end_tls_session(int);
-char *getpass( const char*);
+int getpassword( const char*);

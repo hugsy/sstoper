@@ -104,9 +104,14 @@ $
 
 Incrementing verbose option (0-3) will display more connection events.
 
-
 Actually working on Linux, other system to be supported.
-   
+
+
+Thanks:
+-------
+- Nicolas Collignon and HSC consultants
+
+
 Comments/Bugs:
 --------------
 Please send me back comments and bugs to <ca __AT__ hsc __DOT__ fr> with
