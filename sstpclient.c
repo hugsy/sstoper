@@ -333,7 +333,8 @@ sock_t init_tcp()
   hostinfo.ai_socktype = SOCK_STREAM;
   hostinfo.ai_flags = 0;
   hostinfo.ai_protocol = 0;
-
+  sock = -1;
+  
   xlog(LOG_INFO, "Connecting to %s:%s ", cfg->server, cfg->port);
 
   if (cfg->proxy)
@@ -365,21 +366,26 @@ sock_t init_tcp()
 		    ll->ai_socktype,
 		    ll->ai_protocol);
     
-      if (sock == -1)
-	continue;
-    
+      if (sock == -1) 
+	{
+	  if (cfg->verbose)
+	    xlog(LOG_ERROR, "init_tcp: socket: %s\n", strerror(errno));		  
+	  continue;
+	}
+      
       if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
 	break;
       
+      if (cfg->verbose)
+	xlog(LOG_ERROR, "init_tcp: connect: %s\n", strerror(errno));
+      
       close(sock);
+      sock = -1;
     }
   
-  if (!ll)
+  if (!ll || sock == -1)
     {
-      xlog(LOG_INFO, "connect failed\n");
-      if (errno && cfg->verbose > 2)
-	xlog(LOG_DEBUG, "%s\n", strerror(errno));
-      sock = -1;
+      xlog(LOG_ERROR, "Failed to create socket\n");
     }
   else 
     {
@@ -387,7 +393,6 @@ sock_t init_tcp()
       
       if (cfg->verbose > 2)
 	xlog(LOG_DEBUG, "Using fd %ld\n", sock);
-
     }
   
   freeaddrinfo(res);
@@ -463,14 +468,16 @@ int init_tls_session()
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
 	xlog(LOG_ERROR, (char*)err);
-      
+      else
+	xlog(LOG_ERROR, "init_tls_session: gnutls_priority_set_direct: %s\n",
+	     gnutls_strerror(retcode));	
       return -1;
     }
 
   retcode = gnutls_certificate_allocate_credentials (&creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      xlog(LOG_ERROR, "gnutls_certificate_allocate_credentials %s\n",
+      xlog(LOG_ERROR, "init_tls_session: gnutls_certificate_allocate_credentials: %s\n",
 	   gnutls_strerror(retcode));
       return -1;
     }
@@ -478,7 +485,7 @@ int init_tls_session()
   retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
-      xlog(LOG_ERROR, "gnutls_certificate_set_x509_trust_file: no valid certificate.\n%s\n",
+      xlog(LOG_ERROR, "init_tls_session: gnutls_certificate_set_x509_trust_file: %s\n",
 	   gnutls_strerror(retcode));
       return -1;
     }
@@ -486,7 +493,7 @@ int init_tls_session()
   retcode = gnutls_credentials_set (tls, GNUTLS_CRD_CERTIFICATE, &creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
-      xlog(LOG_ERROR, "init_tls_session: tls_credentials_set\n%s",
+      xlog(LOG_ERROR, "init_tls_session: tls_credentials_set: %s",
 	   gnutls_strerror(retcode));
       return -1;
     }
@@ -499,7 +506,6 @@ int init_tls_session()
     {
       xlog(LOG_ERROR, "init_tls_session: gnutls_handshake: %s\n",
 	   gnutls_strerror(retcode));
-      end_tls_session(retcode);
       return -1;
     }
   
@@ -629,7 +635,7 @@ void sighandle(int signum)
  * @param argc: number of command-line argument
  * @param argv: array of command-line argument
  * @param envp: array of environment argument
- * @return EXIT_SUCCESS if all good, EXIT_FAILURE otherwise
+ * @return EXIT_SUCCESS in a perfect world, EXIT_FAILURE otherwise
  */
 int main (int argc, char** argv, char** envp)
 {
@@ -666,18 +672,18 @@ int main (int argc, char** argv, char** envp)
   if (!cfg->password)
     {
       if (cfg->verbose)
-	xlog(LOG_INFO, "No password specified, prompting for one.\n");
+		xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
       retcode = getpassword("Password: ");
       
       if (!cfg->password || retcode < 0)
-	{
-	  xlog(LOG_ERROR, "Failed to read password\n");
-	  if (errno && cfg->verbose > 2)
-	    xlog(LOG_ERROR, "errno: %s\n", strerror(errno));
-	  
-	  goto end;
-	}
+		{
+		  xlog(LOG_ERROR, "Failed to read password\n");
+		  if (errno && cfg->verbose > 2)
+			xlog(LOG_ERROR, "errno: %s\n", strerror(errno));
+		  
+		  goto end;
+		}
     }
   
   check_default_arg(&cfg->port, "443");
@@ -760,12 +766,13 @@ int main (int argc, char** argv, char** envp)
       goto disco;
     }
     
-
+      
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating SSTP negociation\n");
   
   sstp_loop();
 
+  
  disco:
   retcode = !retcode ? EXIT_SUCCESS : EXIT_FAILURE; 
   end_tls_session(retcode);

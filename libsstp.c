@@ -127,7 +127,7 @@ int is_valid_header(sstp_header_t* header, ssize_t recv_len)
  */
 int is_control_packet(sstp_header_t* packet_header)
 {
-  return (packet_header->reserved == SSTP_CONTROL_PACKET) ? TRUE : FALSE;
+  return (packet_header->reserved == SSTP_CONTROL_PACKET);
 }
 
 
@@ -150,15 +150,14 @@ int https_session_negociation()
     
   rbytes = snprintf(buf, 1024,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
-		    "Host: fuuuuuuuuu%s\r\n" /* note: le hostname jamais valide cote serveur */
-		    "SSTPCORRELATIONID: fuuuuuuuu%s\r\n" /* <-- note: on peut mettre nawak ici */
+		    "Host: %s\r\n"
+		    "SSTPCORRELATIONID: %s\r\n"
 		    "Content-Length: %llu\r\n"
-		    "Cookie: ClientHTTPCookie=True; ClientBypassHLAuth=True\r\n"
 		    "\r\n",
 		    SSTP_HTTPS_RESOURCE,
 		    cfg->server,
 		    guid,
-		    __UNSIGNED_LONG_LONG_MAX__);
+  		    __UNSIGNED_LONG_LONG_MAX__);
 
   if (cfg->verbose > 2)
     xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
@@ -173,13 +172,12 @@ int https_session_negociation()
       if (cfg->verbose > 1) 
 	{
 	  xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
-
+	  
 	  if (cfg->verbose > 2)
 	    xlog(LOG_DEBUG , "Received: %s\n", buf);
 	}
       
       sess->rx_bytes += rbytes;
-      
     }
   else if (rbytes == 0)
     {
@@ -189,11 +187,21 @@ int https_session_negociation()
   else 
     {
       xlog(LOG_ERROR, "gnutls_record_recv: %s\n", gnutls_strerror(rbytes));
-      return -2;
+      return -1;
     }
 
-  if (strncmp(buf, "HTTP/1.1 200", 12)) 
-    return -3;
+  if (strncmp(buf, "HTTP/1.1 200", 12))
+    {
+      xlog(LOG_ERROR, "Incorrect HTTP response header\n");
+      if (cfg->verbose > 1)
+	{
+	  buf[1023] = '\0';
+	  xlog(LOG_INFO, buf);
+	}
+      
+      return -1;
+    }
+  
 
   return 0;
 }
@@ -1173,9 +1181,12 @@ int attribute_status_info(void* data, uint16_t attr_len)
  * Based on ssl_ppp_fork() in ssltunnel-1.18/client/main.c
  * Alain Thivillon (Herve Schauer Consultants)
  *
- * Fork and execute pppd daemon
+ * Prepare pppd options and execute pppd daemon in a fork child. For an obscure
+ * reason, probably voodoo, EAP fails while negociation so it has been explicitly
+ * deactivated. 1412 byte MRU size is purely empirical and may be changed.
+ *
  * @return child pid if process is the father or error otherwise (execv pppd)
- **/
+ */
 int sstp_fork() 
 {
   pid_t ppp_pid;
@@ -1192,7 +1203,7 @@ int sstp_fork()
   pppd_args[i++] = "local";
   pppd_args[i++] = "noauth";
   pppd_args[i++] = "sync";
-  pppd_args[i++] = "refuse-eap";
+  pppd_args[i++] = "refuse-eap"; 
   pppd_args[i++] = "nodeflate";
   pppd_args[i++] = "mru"; pppd_args[i++] = "1412";
   
@@ -1268,14 +1279,16 @@ int sstp_fork()
       
       if (execv (pppd_path, pppd_args) == -1)
 	{
-	  xlog (LOG_ERROR, "execv failed: %s\n", strerror(errno));
+	  xlog (LOG_ERROR, "sstp_fork: execv: %s\n", strerror(errno));
 	  return -1;
 	}
     }
 
   else 
     {
-      xlog (LOG_ERROR, "sstp_fork: %s\n", strerror(errno));
+      xlog (LOG_ERROR, "sstp_fork: you should never be here\n");
+      if (cfg->verbose > 1)
+	xlog(LOG_INFO,": %s\n", strerror(errno));
       set_client_status(CLIENT_CALL_DISCONNECTED);
       
       return -1;
