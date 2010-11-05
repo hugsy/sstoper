@@ -1,36 +1,30 @@
 ################################################################################
-# Simple Makefile
+# SSToPer Makefile
 #
 
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.1
 ARCH		=	$(shell uname)
+DEBUG		=	0
 
 CC			=	gcc
-DBGFLAGS	=	-ggdb
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
-DEBUG		=	1
-
-INC		= 	-I/usr/include
-
-ifeq ($(shell uname -m), x86_64)
-LIB		= 	-L/usr/lib64
-else
-LIB		= 	-L/usr/lib
-endif
-
+INC			= 	-I/usr/include
 CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
-ifeq ($(DEBUG), 1)
-CFLAGS		+=	$(DBGFLAGS)
-endif
-
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
-BIN		=	sstoper
-
+BIN			=	sstoper
 ARGS		=	-s 192.168.111.195 -c ~/tmp/certnew.cer -U test-sstp -P Hello1234
+ifeq ($(shell uname -m), x86_64)
+LIB			= 	-L/usr/lib64
+else
+LIB			= 	-L/usr/lib
+endif
+
 ifeq ($(DEBUG), 1)
+CFLAGS		+=	$(DBGFLAGS)
+DBGFLAGS	=	-ggdb
 ARGS		+=	-vvv -l ./pppd_log
 endif
 
@@ -45,7 +39,7 @@ $(BIN) : $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) 
 
 clean :
-	rm -fr $(OBJECTS) $(BIN) *~ *swp \#*\# *.core pppd_log
+	rm -fr $(OBJECTS) $(BIN) *~ *swp \#*\# *.core pppd_log ./docs/$(BIN).8.gz
 
 valgrind: clean $(BIN)
 	valgrind --leak-check=full --show-reachable=yes ./$(BIN) $(ARGS)
@@ -58,8 +52,9 @@ release: clean
 	git add . && git ci -m "$(shell date): Generating stable release" && \
 	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ master |gzip > /tmp/$(BIN)-$(VERSION).tgz
 
-install: $(BIN)
-	install -s -m 755 -o root -- ./$(BIN) /usr/bin/;
+install: $(BIN) 
+	install -s -m 755 -o root -- ./$(BIN) /usr/bin/
+	gzip -c ./docs/$(BIN).8 >> ./docs/$(BIN).8.gz
 	install -m 644 -o root -- ./docs/$(BIN).8.gz /usr/share/man/man8/
 
 uninstall: clean

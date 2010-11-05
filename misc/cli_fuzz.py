@@ -8,13 +8,38 @@
 from socket import socket, getaddrinfo, AF_UNSPEC, SOCK_STREAM, error as SOCKError
 from ssl import wrap_socket, PROTOCOL_TLSv1, CERT_NONE, SSLError
 from os import getuid
-from sys import path, argv
-path.append("/home/chris/code/bordel/")
+from sys import argv
 from random import randint
 from utils import INFO, ERR, OK
+from datetime import datetime
+from sys import stdout, stderr
 
+def now():
+    """Return the time of now, suitable for log"""
+    return datetime.now().strftime("%d/%m/%y %H:%M:%S")
+
+
+def OK(msg):
+    """ Message display function"""
+    stdout.write("[+] %s : %s\n" % (now(), msg))
+    stdout.flush()
+
+    
+def INFO(msg):
+    """ Information (verbose mode) message display function"""
+    stdout.write("[*] %s : %s\n" % (now(), msg))
+    stdout.flush()
+    
+    
+def ERR(msg):
+    """ Error message display function"""
+    stderr.write("[!] %s : %s\n" % (now(), msg))
+    stderr.flush()
+
+    
 def get_fuzzy(max_len):
     return "".join([ chr(randint(0, 255)) for x in xrange(randint(0, max_len)) ])
+
 
 if len(argv) > 1:
     HOST = argv[1]

@@ -1,0 +1,157 @@
+.\" manual page for sstoper
+.\" 
+.\" Licensed under GPLv2
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THIS SOFTWARE IS PROVIDED "AS IS" AND THE AUTHORS DISCLAIM ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.TH SSTOPER 8
+.SH NAME
+sstoper \- SSTP Client for Linux
+
+.SH SYNOPSIS
+.B sstoper [-vDh]
+[-s \fIhostname\fR] 
+[-c \fIca-file\fR] 
+[-U \fIusername\fR] 
+[-P \fIpassword\fR] 
+[-x \fI/path/to/pppd\fR] 
+[-p \fIPORTNUM\fR]
+[-d \fIDomain\fR] 
+[-l \fIlogfile\fR]
+[-m \fIproxy\fR]
+[-n \fIproxy-port\fR]
+
+
+.SH DESCRIPTION
+.LP
+\fIsstoper\fR is an VPN client for *nix based hosts, to establish connection
+with Microsoft SSTP protocol. SSTP (Secure Socket Tunneling Protocol) allows to
+create a Layer-2 based VPN, by encapsulating PPP packets inside an HTTPS
+connection.
+SSToPer relies on GnuTLS library and pppd tool. SSToPer behaviour is
+described like this
+
+.LP
+1. establish a HTTPS connection to remote SSTP server
+.LP
+2. perform SSTP negociation
+.LP
+3. fork with correct parameters to pppd*. 
+
+(* Since pppd requires root privilege, so does sstoper).
+
+
+.SH COMMAND LINE OPTIONS
+.TP
+.B -s|--server \fISERVER
+This mandatory argument defines the SSTP server hostname.
+
+.TP
+.B -c|--ca-file \fI/path/to/ca-file
+The CA trusted file is required by TLS to authenticate the server. By defaut,
+Windows SSTP Server implementation embeds a Web service to retrieve server CA
+file. If you don't already have this file, download it from
+\fIhttp://your.server/certsrv/\fR
+CA file MUST be stored with Base64 PEM format (does not support DER).
+
+.TP
+.B -U|--username \fIUSERNAME\fR
+This mandatory option specifies the username to be used for authentication with
+the remote system. 
+
+.TP
+.B -P|--password \fIPASSWORD\fR
+This mandatory option specifies the password associated with the username (-U)
+to be used for authentication. If not specified, prompt will ask for one.
+
+.TP
+.B -v|--verbose
+This option increases verbosity level. By default, sspclient only displays read
+or sent bytes during the connection.
+
+.TP
+.B -p|--port \fIPORTNUM\fR
+This option specifies an alternative port number. By default SSTP only defines
+usage of TCP port 443, thus this option does not have to be specified.
+
+.TP
+.B -x|--pppd-path \fI/path/to/pppd\fR
+This option specifies the path to pppd binary. The default path under many *nix
+system is "/usr/sbin/pppd".
+
+.TP
+.B -d|--domain \fIwindows.domain.com\fR
+This option will be used by pppd to explicity declare domain name.
+.TP
+
+.B -m|--proxy \fIPROXYHOST\fR
+Specifies proxy host. Proxy will receive inside CONNECT request a special header
+(SSTPVERSION), that can be used to filter out SSTP connection request.
+
+.TP
+.B -n|--proxy-port \fIPROXYPORT\fR
+Specifies port to connect to for PROXYHOST.
+
+.TP
+.B -l|--logfile \fI/path/to/logfile\fR
+This option will be used by pppd to log all pppd actions into specified file.
+
+.TP
+.B -D|--daemon
+Start SSToPer as background process.
+
+
+.SH SUPPORT
+.LP
+\fIsstoper\fR has been tested successfully against Windows (c) 2008
+Entreprise and Windows (c) 2008 Entreprise R2.
+It has been tested on Linux Fedora 13 with standard library, Debian Lenny.
+
+.SH SEE ALSO
+.BR pppd (8)
+.TP
+.B MS SSTP Specification
+\fIhttp://msdn.microsoft.com/en-us/library/cc247338(PROT.10).aspx\fR
+Release v20100820.
+
+.SH AUTHORS
+This tool has been written by Christophe Alladoum. 
+
+.SH BUGS / ENHANCEMENT
+If any bug or misbehaviour is observed, or to suggest enhancement, please email
+me at ca __AT__ hsc __DOT__ fr.
+Thanks !
+
+.SH COPYRIGHT
+SSToPer is release under GPLv2 license.
+.LP
+SSTP is copyrighted by (c) 2010 Microsoft Corporation.
+.LP
+OpenSSL is released under BSD licence
+(http://www.openssl.org/source/license.html) 
+.LP
+GnuTLS is released under LGPL licence 2.1+
+(http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html) 
+.LP
+Redistribution and use in source and binary forms, with or without
+modification, are allowed according to GPLv2 conditions.
+
+.SH DISCLAIMER
+.LP
+THE AUTHORS OF THIS SOFTWARE DISCLAIM ALL WARRANTIES WITH REGARD TO
+THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS, IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
+SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
+OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.

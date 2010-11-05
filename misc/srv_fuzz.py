@@ -7,11 +7,32 @@
 from socket import socket, getaddrinfo, AF_UNSPEC, SOCK_STREAM, error as SOCK_ERR
 from ssl import wrap_socket, PROTOCOL_TLSv1, CERT_NONE
 from os import getuid
-from sys import path
-path.append("/home/chris/code/bordel/")
-from random import randint
-from utils import INFO, ERR, OK
+from datetime import datetime
+from sys import stdout, stderr
 
+def now():
+    """Return the time of now, suitable for log"""
+    return datetime.now().strftime("%d/%m/%y %H:%M:%S")
+
+
+def OK(msg):
+    """ Message display function"""
+    stdout.write("[+] %s : %s\n" % (now(), msg))
+    stdout.flush()
+
+    
+def INFO(msg):
+    """ Information (verbose mode) message display function"""
+    stdout.write("[*] %s : %s\n" % (now(), msg))
+    stdout.flush()
+    
+    
+def ERR(msg):
+    """ Error message display function"""
+    stderr.write("[!] %s : %s\n" % (now(), msg))
+    stderr.flush()
+
+    
 if getuid():
     print ("Must be root to bind 443")
     exit(1)
