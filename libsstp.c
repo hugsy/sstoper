@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <pwd.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -88,12 +89,13 @@ void set_client_status(uint8_t status)
 {
   if (ctx->state == status)
     return;
-  
-  ctx->state = status;
 
   if (cfg->verbose)
-    xlog(LOG_INFO, "Status is %s (%#x)\n",
-	 client_status_str[ctx->state], ctx->state);
+    xlog(LOG_INFO, "status: %s (%#x) -> %s (%#x)\n",
+	 client_status_str[ctx->state], ctx->state,
+	 client_status_str[status], status);
+  
+  ctx->state = status;
 }
 
 
@@ -412,7 +414,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       sstp_control_header_t* control_header;
       uint16_t control_type, control_num_attributes;
       void* attribute_ptr;
-      
+      struct passwd* pw_entry;
+            
       control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       control_type = ntohs( control_header->message_type );
       control_num_attributes = ntohs( control_header->num_attributes );
@@ -451,10 +454,40 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 
 	  retcode = sstp_fork();
 	  if (retcode < 0) return -1;
-	  
+
 	  ctx->pppd_pid = retcode;
 	  if (cfg->verbose)
 	    xlog (LOG_INFO, "%s forked as %d\n", cfg->pppd_path, ctx->pppd_pid);
+
+	  /* dropping sstoper privileges */
+	  retcode = chdir(NO_PRIV_DIR);
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "Chdir to '%s'\n", NO_PRIV_DIR);
+	  
+ 	  if (retcode)
+	    {
+	      xlog(LOG_ERROR, "%s\n", strerror(errno));
+	      return -1;
+	    }
+
+	  pw_entry = getpwnam(NO_PRIV_USER);
+	  if (cfg->verbose)
+	    xlog(LOG_INFO, "Switch user to '%s'\n", NO_PRIV_USER);
+	  
+	  if (!pw_entry)
+	    {
+	      xlog(LOG_ERROR, "Failed to get user '%s': %s\n",
+		   NO_PRIV_USER, strerror(errno));
+	      return -1;
+	    }
+
+	  retcode = setuid(pw_entry->pw_uid);
+	  if (retcode < 0)
+	    {
+	      xlog(LOG_ERROR, "Failed to drop privilege, exit\n");
+	      xlog(LOG_ERROR, "%s\n", strerror(errno));
+	      return -1;
+	    }
 
 	  break;
 	    
@@ -775,7 +808,7 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   uint16_t i;
   void *data, *data_ptr, *attr_ptr;
 
-  if (attributes == NULL && attribute_number != 0)
+  if (!attributes && attribute_number)
     {
       xlog(LOG_ERROR, "No attribute specified. Cannot send message.\n");
       return;
@@ -1360,7 +1393,7 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
   if (mdlen != hash_len)
     {
       xlog(LOG_ERROR, "%s function didn't return valid data!\n",
-		   crypto_req_attrs_str[ctx->hash_algorithm]);
+	   crypto_req_attrs_str[ctx->hash_algorithm]);
       xfree(md);
       return NULL;
     }
@@ -1372,14 +1405,13 @@ uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n)
 /**
  * Functions defined below are only used to generate correct CMac value
  * Also see:
- * - http:tools.ietf.org/search/rfc3079
- * - http:tools.ietf.org/search/rfc2759
+ * - http://tools.ietf.org/search/rfc3079
+ * - http://tools.ietf.org/search/rfc2759
  */
 void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len)
 {
   uint8_t buf[512];
   size_t i;
-
   MD4_CTX c;
   
   if (password_len > 256)
@@ -1391,9 +1423,8 @@ void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t pass
   memset(buf, 0, 512);
   /* Convert password into Unicode */
   for (i=0; i<password_len; i++)
-    {
-      buf[i*2] = password[i];
-    }
+    buf[i*2] = password[i];
+    
     
   MD4_Init(&c);
   MD4_Update(&c, buf, password_len * 2);

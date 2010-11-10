@@ -48,6 +48,8 @@
 #define PPP_MAX_MTU 4096
 #define PPP_MAX_MRU 4096
 
+#define NO_PRIV_USER "nobody"
+#define NO_PRIV_DIR "/var/empty"
 
 /* SSTP Packet Type */
 enum packet_types 

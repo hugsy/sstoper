@@ -15,7 +15,7 @@ CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
 BIN			=	sstoper
-ARGS		=	-s 192.168.111.195 -c ~/tmp/certnew.cer -U test-sstp -P Hello1234
+
 ifeq ($(shell uname -m), x86_64)
 LIB			= 	-L/usr/lib64
 else
@@ -25,10 +25,9 @@ endif
 ifeq ($(DEBUG), 1)
 CFLAGS		+=	$(DBGFLAGS)
 DBGFLAGS	=	-ggdb
-ARGS		+=	-vvv -l ./pppd_log
 endif
 
-.PHONY : clean all valgrind release snapshot test
+.PHONY : clean all valgrind release snapshot
 
 .c.o :
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -59,6 +58,3 @@ install: $(BIN)
 
 uninstall: clean
 	rm -fr /usr/bin/$(BIN) /usr/share/man/man8/$(BIN).8.gz
-
-test:   $(BIN)
-	./$(BIN) $(ARGS)
