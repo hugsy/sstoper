@@ -1,4 +1,8 @@
 /*
+ * SSToPer, Linux SSTP Client
+ * Christophe Alladoum < ca __AT__ hsc __DOT__ fr>
+ * Herve Schauer Consultants (http://www.hsc.fr)
+ *
  *            GNU GENERAL PUBLIC LICENSE
  *              Version 2, June 1991
  * 

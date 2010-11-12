@@ -6,7 +6,7 @@ PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.1
 ARCH		=	$(shell uname)
-DEBUG		=	0
+DEBUG		=	1
 
 CC			=	gcc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)

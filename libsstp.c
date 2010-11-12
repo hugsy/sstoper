@@ -1,4 +1,8 @@
 /*
+ * SSToPer, Linux SSTP Client
+ * Christophe Alladoum < ca __AT__ hsc __DOT__ fr>
+ * Herve Schauer Consultants (http://www.hsc.fr)
+ *
  *            GNU GENERAL PUBLIC LICENSE
  *              Version 2, June 1991
  * 
@@ -162,14 +166,16 @@ int https_session_negociation()
 {
   ssize_t rbytes;
   char buf[1024], guid[39];
-
+    
   rbytes = -1;
+    
+  /* create sstp session */
+  sess = (sstp_session_t*) xmalloc(sizeof(sstp_session_t));
+
   memset(guid, 0, 39);
   memset(buf, 0, 1024);
-  generate_guid(guid);
 
-  sess = (sstp_session_t*) xmalloc(sizeof(sstp_session_t));
-    
+  generate_guid(guid);
   rbytes = snprintf(buf, 1024,
 		    "SSTP_DUPLEX_POST %s HTTP/1.1\r\n"
 		    "Host: %s\r\n"
@@ -224,13 +230,13 @@ int https_session_negociation()
       return -1;
     }
   
-
   return 0;
 }
 
 /**
- * Emits SSTP negociation request, ie Control message with ENCAPSULATED_PROTOCOL_ID
- * attribute. Negociation timer is set up and state is changed.
+ * Emits SSTP negociation request, ie Control message with
+ * ENCAPSULATED_PROTOCOL_ID attribute. Negociation timer is set up and state is
+ * changed.
  */
 void sstp_init()
 {
@@ -279,7 +285,9 @@ void sstp_loop()
   ctx->pppd_pid = -1;
 
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
-
+  
+  
+  /* start negociation */  
   sstp_init();
 
   
@@ -367,7 +375,7 @@ void sstp_loop()
       xlog(LOG_INFO, "SSTP connection time: %lu sec\n", (sess->tv_end.tv_sec - sess->tv_start.tv_sec));
       xlog(LOG_INFO, "Sent %lu bytes, received %lu bytes\n", sess->rx_bytes, sess->tx_bytes);
     }
-  
+
   xfree(chap_ctx);
   xfree(sess);
   xfree(ctx);
@@ -415,7 +423,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       uint16_t control_type, control_num_attributes;
       void* attribute_ptr;
       struct passwd* pw_entry;
-            
+      
       control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       control_type = ntohs( control_header->message_type );
       control_num_attributes = ntohs( control_header->num_attributes );
@@ -452,24 +460,30 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
+	  
+	  /* create forked pppd process */
 	  retcode = sstp_fork();
-	  if (retcode < 0) return -1;
-
+	  if (retcode <= 0)
+	    {
+	      xlog(LOG_ERROR, "Cannot create pppd process, leaving.\n");
+	      return -1 ;
+	    }
+	  
 	  ctx->pppd_pid = retcode;
 	  if (cfg->verbose)
-	    xlog (LOG_INFO, "%s forked as %d\n", cfg->pppd_path, ctx->pppd_pid);
-
+	    xlog (LOG_INFO, "'%s' forked with PID %d\n", cfg->pppd_path, ctx->pppd_pid);
+	  
 	  /* dropping sstoper privileges */
 	  retcode = chdir(NO_PRIV_DIR);
 	  if (cfg->verbose)
-	    xlog(LOG_INFO, "Chdir to '%s'\n", NO_PRIV_DIR);
+	    xlog(LOG_INFO, "chdir-ed '%s'\n", NO_PRIV_DIR);
 	  
- 	  if (retcode)
+	  if (retcode)
 	    {
 	      xlog(LOG_ERROR, "%s\n", strerror(errno));
-	      return -1;
+	      return -1 ;
 	    }
-
+	  
 	  pw_entry = getpwnam(NO_PRIV_USER);
 	  if (cfg->verbose)
 	    xlog(LOG_INFO, "Switch user to '%s'\n", NO_PRIV_USER);
@@ -478,17 +492,17 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	    {
 	      xlog(LOG_ERROR, "Failed to get user '%s': %s\n",
 		   NO_PRIV_USER, strerror(errno));
-	      return -1;
+	      return -1 ;
 	    }
-
+	  
 	  retcode = setuid(pw_entry->pw_uid);
 	  if (retcode < 0)
 	    {
 	      xlog(LOG_ERROR, "Failed to drop privilege, exit\n");
 	      xlog(LOG_ERROR, "%s\n", strerror(errno));
-	      return -1;
+	      return -1 ;
 	    }
-
+	  
 	  break;
 	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
@@ -1288,8 +1302,7 @@ int sstp_fork()
       i = 0;
 
       xlog(LOG_INFO, "execv-ing ");
-      while ((ptr = pppd_args[i++]))
-	xlog(LOG_INFO, "%s ", ptr);
+      while ((ptr = pppd_args[i++])) xlog(LOG_INFO, "%s ", ptr);
       xlog(LOG_INFO, "\n");
     }
   
@@ -1317,18 +1330,20 @@ int sstp_fork()
       if (amaster > 2) close(amaster);     
       
       return ppp_pid;
+      
     }
   
   else if (ppp_pid == 0) 
     {
+      
+      /* spawn pppd */
       close(sockfd);
-         
+      
       dup2(aslave, 0);
       dup2(aslave, 1);
       
       if (aslave > 2) close (aslave);
       if (amaster > 2) close (amaster);
-
       
       if (execv (pppd_path, pppd_args) == -1)
 	{
