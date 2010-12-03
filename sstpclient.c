@@ -29,6 +29,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -43,6 +44,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/capability.h>
 
 #include "sstpclient.h"
 #include "libsstp.h"
@@ -131,6 +133,8 @@ void* xmalloc(size_t size)
 
 /**
  * Free configuration blokcs
+ *
+  @param ptr: pointer to zone to free
  */
 void xfree(void* ptr)
 {
@@ -145,6 +149,9 @@ void xfree(void* ptr)
 
 /**
  * Usage
+ *
+ * @param name: argv[0]
+ * @param retcode: indicates how program should exit 
  */
 void usage(char* name, int retcode)
 {
@@ -153,11 +160,9 @@ void usage(char* name, int retcode)
   fd = (retcode == 0) ? stdout : stderr;
       
   fprintf(fd,
-	  "\n--------------------------------------------------------------------------------\n"
-	  "%s, %.2f\n"
-	  "--\n"
+	  "\n%s, version %.2f : "
 	  "SSTP VPN client for %s\n"
-	  "--------------------------------------------------------------------------------\n\n"
+	  "\n"
 	  "Usage (as root):\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
 	  "\t-s, --server=my.sstp.server.com (mandatory)\tSSTP Server URI\n"
@@ -169,7 +174,7 @@ void usage(char* name, int retcode)
 	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd in file\n"
 	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain\n"
 	  "\t-m, --proxy=PROXYHOST\t\t\t\tSpecify proxy location\n"
-	  "\t-n, --proxy-port=PROXYPORT\t\t\t\tSpecify proxy port\n"
+	  "\t-n, --proxy-port=PROXYPORT\t\t\tSpecify proxy port\n"
 	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"
 	  "\t-D, --daemon\t\t\t\t\tStart as daemon\n"
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
@@ -188,6 +193,7 @@ void usage(char* name, int retcode)
  * Custom function to read password from /dev/tty.
  *
  * @param prompt : string to display for password
+ * @return 0 if all is good, -1 otherwise
  */
 int getpassword(const char* prompt)
 {
@@ -250,6 +256,9 @@ int getpassword(const char* prompt)
 /**
  * Parse options
  *
+ * @param cfg: pointer to sstp_config zone
+ * @param argc: number of arguments
+ * @param argv: argv
  */
 void parse_options (sstp_config* cfg, int argc, char** argv)
 {
@@ -572,6 +581,135 @@ void end_tls_session(int reason)
 
 
 /**
+ * Checks if process has a capability.
+ *
+ * @param flag: capability flag (man 7 capabilities)
+ * @return: TRUE if process has capability, FALSE otherwise, -1 in case of
+ * error
+ */
+int is_cap(cap_value_t flag)
+{
+  cap_t caps = NULL;
+  cap_flag_value_t cap_status = 0;
+  
+  caps = cap_get_proc();
+
+  if (!caps)
+    {
+      xlog(LOG_ERROR, "Error while getting caps\n");
+      return -1;
+    }
+
+  if (cap_get_flag(caps, flag, CAP_EFFECTIVE , &cap_status) == -1) 
+    {
+      xlog(LOG_ERROR, "Failed to get flag\n");
+      return -1;
+    }
+
+  switch (cap_status) 
+    {
+    case CAP_SET:
+      if (cfg->verbose > 1)
+	xlog(LOG_INFO, "CAP_KILL capability set\n");
+      return TRUE;
+      
+    case CAP_CLEAR:
+      if (cfg->verbose > 1)
+	xlog(LOG_INFO, "CAP_KILL capability not set\n");
+      return FALSE;
+     }
+  
+  if (cap_free(caps) == -1)
+    {
+      xlog(LOG_ERROR, "Fail to free caps\n");
+      return -1;
+    }
+
+  return -1;
+}
+
+
+/**
+ * Give process capability
+ *
+ * @param flag: capability flag to set (man 7 capabilities)
+ * @return: 0 if process acquired capability, -1 in case of error
+ */
+int set_cap(cap_value_t flag)
+{
+  cap_t caps = NULL;
+    
+  caps = cap_get_proc();
+
+  if (!caps)
+    {
+      xlog(LOG_ERROR, "Error while getting caps\n");
+      return -1;
+    }
+
+  if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &flag, CAP_SET) == -1)
+    {
+      xlog(LOG_ERROR, "Error while settting flag\n");
+      return -1;
+    }
+
+  if (cap_set_proc(caps) == -1) 
+    {
+      xlog(LOG_ERROR, "Error while applying caps\n");
+      return -1;
+    }
+
+  if (cap_free(caps) == -1)
+    {
+      xlog(LOG_ERROR, "Fail to free caps\n");
+      return -1;
+    }
+
+  return 0;
+}
+
+
+/**
+ * Unset capability
+ *
+ * @param flag: capability flag to unset (man 7 capabilities)
+ * @return: 0 if capability was removed, -1 in case of error
+ */
+int unset_cap(cap_value_t flags)
+{
+  cap_t caps = NULL;
+    
+  caps = cap_get_proc();
+
+  if (!caps)
+    {
+      xlog(LOG_ERROR,  "Error while getting caps\n");
+      return -1;
+    }
+
+  if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &flags, CAP_CLEAR) == -1)
+    {
+      xlog(LOG_ERROR, "failed to change cap\n");
+      return -1;
+    }
+
+  if (cap_set_proc(caps) == -1) 
+    {
+      xlog(LOG_ERROR, "Error while applying caps\n");
+      return -1;
+    }
+
+  if (cap_free(caps) == -1)
+    {
+      xlog(LOG_ERROR, "Fail to free caps\n");
+      return -1;
+    }
+
+  return 0;  
+}
+
+
+/**
  * Checks certificate list
  *
  * @return 0 if all is good, -1 if not.
@@ -643,7 +781,57 @@ void sighandle(int signum)
       
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
+
+    case SIGUSR1:
+      if (cfg->verbose)
+	xlog(LOG_INFO, "do_loop -> FALSE\n");
+
+      do_loop = FALSE;
+      
+      break;
+    
     }
+}
+
+
+/**
+ * Change user
+ * 
+ * @param user: username to switch to
+ * @param final: if TRUE, it won't be possible to re-gain root privs
+ * @return 0 if all good, -1 otherwise
+ */
+int change_user(char* user, int final) 
+{
+  struct passwd* pw_entry;
+  int retcode = 0;
+  int (*DROP)();
+  
+  pw_entry = getpwnam(user);
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Switch user to '%s'\n", user);
+  
+  if (!pw_entry)
+    {
+      xlog(LOG_ERROR, "Failed to get user '%s': %s\n",
+	   user, strerror(errno));
+      return -1;     
+    }
+
+  if (final)
+    DROP = &setuid;
+  else
+    DROP = &seteuid;
+  
+  retcode = DROP(pw_entry->pw_uid);
+  if (retcode < 0)
+    {
+      xlog(LOG_ERROR, "Failed to drop privilege, exit\n");
+      xlog(LOG_ERROR, "%s\n", strerror(errno));
+      return -1;
+    }
+
+  return 0;
 }
 
 
@@ -664,6 +852,7 @@ int main (int argc, char** argv, char** envp)
 {
   struct sigaction saction;
   int retcode;
+
   
 #if !defined  __linux__
   xlog (LOG_ERROR, "Operating system not supported\n");
@@ -695,18 +884,18 @@ int main (int argc, char** argv, char** envp)
   if (!cfg->password)
     {
       if (cfg->verbose)
-		xlog(LOG_INFO, "No password specified, prompting for one.\n");
+	xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
       retcode = getpassword("Password: ");
       
       if (!cfg->password || retcode < 0)
-		{
-		  xlog(LOG_ERROR, "Failed to read password\n");
-		  if (errno && cfg->verbose > 2)
-			xlog(LOG_ERROR, "errno: %s\n", strerror(errno));
-		  
-		  goto end;
-		}
+	{
+	  xlog(LOG_ERROR, "Failed to read password\n");
+	  if (errno && cfg->verbose > 2)
+	    xlog(LOG_ERROR, "errno: %s\n", strerror(errno));
+	  
+	  goto end;
+	}
     }
   
   check_default_arg(&cfg->port, "443");
@@ -714,6 +903,7 @@ int main (int argc, char** argv, char** envp)
 
   if (cfg->proxy)
     check_default_arg(&cfg->proxy_port, "8080");
+  
   if (cfg->proxy_port && !cfg->proxy)
     xlog(LOG_INFO, "No PROXYHOST specified for PROXYPORT '%s'. Dropping.\n", cfg->proxy_port);
   
@@ -738,6 +928,7 @@ int main (int argc, char** argv, char** envp)
   sigaction(SIGINT, &saction, NULL);
   sigaction(SIGALRM, &saction, NULL);
   sigaction(SIGCHLD, &saction, NULL);
+  sigaction(SIGUSR1, &saction, NULL);
 
   
   /* main starts here */
@@ -779,6 +970,76 @@ int main (int argc, char** argv, char** envp)
     }
 
   
+  /* create forked pppd process and suspend it */
+  pid_t pid = sstp_fork();
+  if (pid <= 0)
+    {
+      xlog(LOG_ERROR, "Cannot create pppd process, leaving.\n");
+      retcode = -1 ;
+      goto disco;
+    }
+  
+  if (cfg->verbose)
+    xlog (LOG_INFO, "'%s' forked with PID %d\n", cfg->pppd_path, pid);
+  
+
+  /* drop sstoper privileges */
+  retcode = chdir(NO_PRIV_DIR);
+  if (cfg->verbose)
+    xlog(LOG_INFO, "chdir-ed '%s'\n", NO_PRIV_DIR);
+  
+  if (retcode)
+    {
+      xlog(LOG_ERROR, "%s\n", strerror(errno));
+      retcode = -1;
+      goto disco;
+    }
+  
+  retcode = change_user(NO_PRIV_USER, FALSE);
+  if (retcode < 0) 
+    goto disco;
+
+  
+  /* acquire CAP_SETUID to be able to drop privs later */ 
+  retcode = set_cap(CAP_SETUID);
+  if (retcode < 0)
+    goto disco;
+
+  
+  /* acquire CAP_KILL to send USR1 once negociation is done */ 
+  retcode = is_cap(CAP_KILL);
+  switch(retcode)
+    {
+    case FALSE:
+      retcode = set_cap(CAP_KILL);
+      if (retcode < 0)
+	goto disco;
+
+      retcode = is_cap(CAP_KILL);
+      if (retcode != TRUE)
+	{
+	  xlog(LOG_ERROR, "Failed to position CAP_KILL flags\n");
+	  retcode = -1;
+	  goto disco;
+	}
+      
+      break;
+
+    case TRUE:
+      if (cfg->verbose > 1)
+	xlog(LOG_INFO, "Process is already capable\n");
+      break;
+
+    default:
+      xlog(LOG_ERROR, "Failed to get capabilities flags\n");
+      retcode = -1;
+      goto disco;
+    }
+
+  
+  /* sstoper here has no privilege (nobody) but CAP_KILL cap */
+  
+  
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating HTTPS negociation\n");
   
@@ -793,7 +1054,7 @@ int main (int argc, char** argv, char** envp)
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating SSTP negociation\n");
   
-  sstp_loop();
+  sstp_loop(pid);
 
   
  disco:
