@@ -169,7 +169,7 @@ void usage(char* name, int retcode)
 	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd in file\n"
 	  "\t-d, --domain=MyWindowsDomain\t\t\tSpecify Windows domain\n"
 	  "\t-m, --proxy=PROXYHOST\t\t\t\tSpecify proxy location\n"
-	  "\t-n, --proxy-port=PROXYPORT\t\t\t\tSpecify proxy port\n"
+	  "\t-n, --proxy-port=PROXYPORT\t\t\tSpecify proxy port\n"
 	  "\t-v, --verbose\t\t\t\t\tIncrement verbose mode\n"
 	  "\t-D, --daemon\t\t\t\t\tStart as daemon\n"
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"

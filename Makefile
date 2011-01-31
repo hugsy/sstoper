@@ -4,22 +4,22 @@
 
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
-VERSION		=	0.1
+VERSION		=	0.2
 ARCH		=	$(shell uname)
-DEBUG		=	0
+DEBUG		=	1
 
-CC			=	gcc
+CC		=	gcc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
-INC			= 	-I/usr/include
+INC		= 	-I/usr/include
 CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
 LDFLAGS		= 	-lcrypto -lutil -lgnutls
 OBJECTS		=	sstpclient.o libsstp.o
-BIN			=	sstoper
+BIN		=	sstoper
 
 ifeq ($(shell uname -m), x86_64)
-LIB			= 	-L/usr/lib64
+LIB		= 	-L/usr/lib64
 else
-LIB			= 	-L/usr/lib
+LIB		= 	-L/usr/lib
 endif
 
 ifeq ($(DEBUG), 1)
