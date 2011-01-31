@@ -287,14 +287,13 @@ typedef struct __chap_context
 
 chap_context_t* chap_ctx;
 
-
 /* functions declarations  */
 void generate_guid(char data[]);
 int is_valid_header(sstp_header_t* header, ssize_t recv_len);
 int is_control_packet(sstp_header_t* packet_header);
 int https_session_negociation();
 void sstp_init();
-void sstp_loop();
+void sstp_loop(pid_t);
 int sstp_decode(void* rbuffer, ssize_t sstp_length);
 int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read); 
 void sstp_send(void* data, size_t data_length);

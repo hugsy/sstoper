@@ -33,7 +33,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <pwd.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -269,7 +268,7 @@ void sstp_init()
  * - handle receive packets
  * - send packets
  */
-void sstp_loop()
+void sstp_loop(pid_t pppd_pid)
 {
   fd_set rcv_fd;
   int retcode;
@@ -282,8 +281,9 @@ void sstp_loop()
   ctx->state = CLIENT_CALL_DISCONNECTED;
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
-  ctx->pppd_pid = -1;
-
+  /* ctx->pppd_pid = -1; */
+  ctx->pppd_pid = pppd_pid;
+  
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
   
   
@@ -422,7 +422,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       sstp_control_header_t* control_header;
       uint16_t control_type, control_num_attributes;
       void* attribute_ptr;
-      struct passwd* pw_entry;
+      /* struct passwd* pw_entry; */
       
       control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       control_type = ntohs( control_header->message_type );
@@ -460,49 +460,21 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
 
+	  if (cfg->verbose > 1)
+	    xlog(LOG_INFO, "%d: sending SIGUSR1 to %d\n", getpid(), ctx->pppd_pid);
 	  
-	  /* create forked pppd process */
-	  retcode = sstp_fork();
-	  if (retcode <= 0)
-	    {
-	      xlog(LOG_ERROR, "Cannot create pppd process, leaving.\n");
-	      return -1 ;
-	    }
-	  
-	  ctx->pppd_pid = retcode;
-	  if (cfg->verbose)
-	    xlog (LOG_INFO, "'%s' forked with PID %d\n", cfg->pppd_path, ctx->pppd_pid);
-	  
-	  /* dropping sstoper privileges */
-	  retcode = chdir(NO_PRIV_DIR);
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "chdir-ed '%s'\n", NO_PRIV_DIR);
-	  
-	  if (retcode)
-	    {
-	      xlog(LOG_ERROR, "%s\n", strerror(errno));
-	      return -1 ;
-	    }
-	  
-	  pw_entry = getpwnam(NO_PRIV_USER);
-	  if (cfg->verbose)
-	    xlog(LOG_INFO, "Switch user to '%s'\n", NO_PRIV_USER);
-	  
-	  if (!pw_entry)
-	    {
-	      xlog(LOG_ERROR, "Failed to get user '%s': %s\n",
-		   NO_PRIV_USER, strerror(errno));
-	      return -1 ;
-	    }
-	  
-	  retcode = setuid(pw_entry->pw_uid);
+	  retcode = kill(ctx->pppd_pid, SIGUSR1);
 	  if (retcode < 0)
 	    {
-	      xlog(LOG_ERROR, "Failed to drop privilege, exit\n");
-	      xlog(LOG_ERROR, "%s\n", strerror(errno));
-	      return -1 ;
+	      xlog(LOG_ERROR, "kill failed : %s\n", strerror(errno));
+	      return -1;
 	    }
-	  
+
+	  /* drop forever all root privileges */
+	  retcode = change_user(NO_PRIV_USER, TRUE);
+	  if (retcode < 0) 
+	    return -1;
+
 	  break;
 	    
 	case SSTP_MSG_CALL_CONNECT_NAK:
@@ -1329,12 +1301,36 @@ int sstp_fork()
       if (aslave > 2) close(aslave);
       if (amaster > 2) close(amaster);     
       
-      return ppp_pid;
-      
+      return ppp_pid;     
     }
   
   else if (ppp_pid == 0) 
     {
+      /* wait for SIGUSR1 from sstoper process */
+      sigset_t	newmask, oldmask, zeromask;
+
+      do_loop = TRUE;
+      sigemptyset(&zeromask);    
+      sigemptyset(&newmask);
+      sigaddset(&newmask, SIGUSR1);
+      
+      if (sigprocmask(SIG_BLOCK, &newmask, &oldmask) < 0)
+	{
+	  xlog(LOG_ERROR, "Fail to block SIGMASK\n");
+	  return -1;
+	}
+
+      while (do_loop)
+	sigsuspend(&zeromask);
+
+      do_loop = FALSE;
+      
+      if (sigprocmask(SIG_SETMASK, &oldmask, NULL) < 0)
+	{
+	  xlog(LOG_ERROR, "Fail to reset SIGMASK\n");
+	  return -1;
+	}
+
       
       /* spawn pppd */
       close(sockfd);
@@ -1344,6 +1340,7 @@ int sstp_fork()
       
       if (aslave > 2) close (aslave);
       if (amaster > 2) close (amaster);
+
       
       if (execv (pppd_path, pppd_args) == -1)
 	{

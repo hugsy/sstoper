@@ -76,6 +76,7 @@ gnutls_x509_crt_t certificate;
 gnutls_certificate_credentials_t creds;
 sock_t sockfd;
 sstp_config *cfg;
+int do_loop;
 
 
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
@@ -89,3 +90,5 @@ int init_tls_session();
 int check_tls_session();
 void end_tls_session(int);
 int getpassword( const char*);
+int change_user(char*, int);
+

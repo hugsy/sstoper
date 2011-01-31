@@ -12,7 +12,7 @@ CC		=	gcc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
 INC		= 	-I/usr/include
 CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
-LDFLAGS		= 	-lcrypto -lutil -lgnutls
+LDFLAGS		= 	-lcrypto -lutil -lgnutls -lcap
 OBJECTS		=	sstpclient.o libsstp.o
 BIN		=	sstoper
 
