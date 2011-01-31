@@ -1,6 +1,6 @@
 /*
  * SSToPer, Linux SSTP Client
- * Christophe Alladoum < ca __AT__ hsc __DOT__ fr>
+ * Christophe Alladoum < christophe __DOT__ alladoum __AT__ hsc __DOT__ fr>
  * Herve Schauer Consultants (http://www.hsc.fr)
  *
  *            GNU GENERAL PUBLIC LICENSE
@@ -19,6 +19,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 #define _GNU_SOURCE 1
@@ -46,7 +47,7 @@
 #include <sys/wait.h>
 #include <sys/capability.h>
 
-#include "sstpclient.h"
+#include "main.h"
 #include "libsstp.h"
 
 
@@ -134,7 +135,7 @@ void* xmalloc(size_t size)
 /**
  * Free configuration blokcs
  *
-  @param ptr: pointer to zone to free
+ * @param ptr: pointer to zone to free
  */
 void xfree(void* ptr)
 {
@@ -371,7 +372,7 @@ sock_t init_tcp()
 
   if (cfg->proxy)
     {
-      xlog(LOG_INFO, "through proxy %s:%s ", cfg->proxy, cfg->proxy_port);
+      xlog(LOG_INFO, "Through proxy %s:%s ", cfg->proxy, cfg->proxy_port);
       host = cfg->proxy;
       port = cfg->proxy_port;
     }

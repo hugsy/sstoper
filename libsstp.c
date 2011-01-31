@@ -1,6 +1,6 @@
 /*
  * SSToPer, Linux SSTP Client
- * Christophe Alladoum < ca __AT__ hsc __DOT__ fr>
+ * Christophe Alladoum < christophe __DOT__ alladoum __AT__ hsc __DOT__ fr>
  * Herve Schauer Consultants (http://www.hsc.fr)
  *
  *            GNU GENERAL PUBLIC LICENSE
@@ -19,6 +19,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 #define _GNU_SOURCE 1
@@ -47,7 +48,7 @@
 #include <gnutls/gnutls.h>
 
 #include "libsstp.h"
-#include "sstpclient.h"
+#include "main.h"
 
 #if defined __linux__
 #include <pty.h>
@@ -537,7 +538,7 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       data_ptr = rbuffer + sizeof(sstp_header_t);
 
       /*
-       * On intercepting a PPP success message, sstpclient will also send
+       * On intercepting a PPP success message, sstoper will also send
        * a SSTP_MSG_CALL_CONNECTED message, allowing PPP data to be treated 
        * on server side.
        * See also : http://tools.ietf.org/search/rfc2759#section-4

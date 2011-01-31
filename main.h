@@ -1,6 +1,6 @@
 /*
  * SSToPer, Linux SSTP Client
- * Christophe Alladoum < ca __AT__ hsc __DOT__ fr>
+ * Christophe Alladoum < christophe __DOT__ alladoum __AT__ hsc __DOT__ fr>
  * Herve Schauer Consultants (http://www.hsc.fr)
  *
  *            GNU GENERAL PUBLIC LICENSE
@@ -19,6 +19,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 

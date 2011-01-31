@@ -1,6 +1,10 @@
 ################################################################################
 # SSToPer Makefile
 #
+# requires :
+# - libgnutls-devel
+# - libcap-devel
+#
 
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
@@ -10,10 +14,10 @@ DEBUG		=	1
 
 CC		=	gcc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
-INC		= 	-I/usr/include
+INC		= 	-I/usr/include 
 CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
 LDFLAGS		= 	-lcrypto -lutil -lgnutls -lcap
-OBJECTS		=	sstpclient.o libsstp.o
+OBJECTS		=	main.o libsstp.o
 BIN		=	sstoper
 
 ifeq ($(shell uname -m), x86_64)
@@ -23,16 +27,17 @@ LIB		= 	-L/usr/lib
 endif
 
 ifeq ($(DEBUG), 1)
-CFLAGS		+=	$(DBGFLAGS)
 DBGFLAGS	=	-ggdb
+CFLAGS		+=	$(DBGFLAGS)
 endif
 
-.PHONY : clean all valgrind release snapshot
+
+.PHONY : clean all valgrind release snapshot check
 
 .c.o :
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-all : $(BIN)
+all : check $(BIN)
 
 $(BIN) : $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) 
