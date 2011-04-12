@@ -169,7 +169,7 @@ int https_session_negociation()
     
   rbytes = -1;
     
-  /* create sstp session */
+  /* Allocate SSTP session */
   sess = (sstp_session_t*) xmalloc(sizeof(sstp_session_t));
 
   memset(guid, 0, 39);
@@ -190,6 +190,7 @@ int https_session_negociation()
   if (cfg->verbose > 2)
     xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
 
+  /* Start negociation */
   sstp_send(buf, rbytes);
 
   memset(buf, 0, 1024);
@@ -1202,7 +1203,7 @@ int attribute_status_info(void* data, uint16_t attr_len)
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
     return 0;
   
-  /* attrib_value is at most 64 bytes (ie full attr len <= 64 + 12 bytes)*/
+  /* attrib_value is at most 64 bytes (ie full attr len <= 64 + 12 bytes) */
   rbytes = sizeof(sstp_attribute_header_t) + 2*sizeof(uint32_t);
 
   while (rbytes < (64+12) && rbytes < attr_len)
@@ -1245,7 +1246,8 @@ int sstp_fork()
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap"; 
   pppd_args[i++] = "nodeflate";
-  pppd_args[i++] = "mru"; pppd_args[i++] = "1412";
+  pppd_args[i++] = "mru";
+  pppd_args[i++] = "1412";
   
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;

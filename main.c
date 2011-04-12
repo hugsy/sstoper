@@ -1036,10 +1036,8 @@ int main (int argc, char** argv, char** envp)
       retcode = -1;
       goto disco;
     }
-
   
-  /* sstoper here has no privilege (nobody) but CAP_KILL cap */
-  
+  /* here, sstoper is nobody and has no privilege but CAP_KILL cap */
   
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating HTTPS negociation\n");

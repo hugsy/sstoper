@@ -1,4 +1,6 @@
-SSToPer, Linux SSTP client
+---[ SSToPer ]------------------------------------------------------------------
+---[ SSTP Client for Linux ]----------------------------------------------------
+---[ By Christophe Alladoum ]---------------------------------------------------
 
 
 What is SSTP ?
@@ -14,13 +16,19 @@ http://en.wikipedia.org/wiki/Secure_Socket_Tunneling_Protocol
 
 
 What is SSToPer ?
---------------------
+-----------------
 
-A Linux implementation for SSTP client, which is embedded by default in
-Microsoft Windows Vista and Seven, used to establish VPN communication 
-with Microsoft Server 2008 and above. Since SSTP is only a wrapper over PPP
-communication, pppd (http://ppp.samba.org/) MUST be installed with the
-synchronous HDLC serial encoding capability enabled.
+SSToPer is a SSTP client for Linux. It creates SSTP communications with any
+Windows Server (2008+) having active service, and is used to establish VPN
+communication  with Microsoft Server 2008 and above. Since SSTP is only a
+wrapper over PPP communication, pppd (http://ppp.samba.org/) MUST be installed
+with the synchronous HDLC serial encoding capability enabled.
+
+Current SSToPer version DOES NOT support certification validation.
+
+It must be considered that SSToPer does not require root privilege but pppd
+requires it. As a consequence, SSToPer will use Linux capability and drop
+privilege to nobody user as soon as pppd process is started.
 
 
 Features:
@@ -29,7 +37,7 @@ Features:
 - Establishes PPP based VPN through SSTP
 - Proxy 
 - HMAC-256 support
-- Wireshark SSTP dissector provided to analyse SSTP behaviour
+- (Opt.) Wireshark SSTP dissector provided to analyse SSTP behaviour
 
 
 Pre-requisites:
@@ -45,8 +53,6 @@ Pre-requisites:
 Todo:
 -----
 
-- IPv6 support (should be working, to test)
-- HMAC-160 support (should be working, to test)
 - Certification validation
 
 
@@ -84,37 +90,43 @@ $ tar xf sstoper.tar.gz
 $ cd sstoper && make 
 }}}
 
-- execute
+- execute (example values are given below)
 {{{
-$ sudo ./sstoper -s server -c server.crt -U user -P pass
-[!] Using default value: 443.
-[!] Using default value: /usr/sbin/pppd.
-Connecting to vpn.tweety.looney:443
-2010-10-31 12:04:39  [!] Using default value: 443
-2010-10-31 12:04:39  [!] Using default value: /usr/sbin/pppd
-Connecting to vpn.tweety.looney:443 
+$ sudo ./sstoper -s tweety.looney -c misc/vpn.tweety.looney.crt -U user1 
+Password: 
+2011-04-12 16:33:45  [!] Using default value: 443
+2011-04-12 16:33:45  [!] Using default value: /usr/sbin/pppd
+Connecting to tweety.looney:443 
+Connected
 SSTP link established
 
 (Hit Ctrl-C to close connection)
 
-^C2010-10-31 12:13:00  [-] sstp_loop: Interrupted system call
-Waiting for /usr/sbin/pppd process (PID:6226) to end
+^C2011-04-12 16:35:39  [-] sstp_loop: Interrupted system call
+Waiting for /usr/sbin/pppd process (PID:7908) to end
 $ 
 }}}
 
 Incrementing verbose option (0-3) will display more connection events.
 
-Actually working on Linux, other system to be supported.
-
-
-Thanks:
--------
-- Nicolas Collignon and HSC consultants
+Actually working on Linux (tested Debian & Fedora), other system to be
+supported.
 
 
 Comments/Bugs:
 --------------
-Please send me back comments and bugs to <ca __AT__ hsc __DOT__ fr> with
-backtrace (using sstoper -vvv options) and/or an strace output of the bug.
+Please send me back comments and bugs to
+<christophe __DOT__ alladoum __AT__ hsc __DOT__ fr>  with backtrace (using sstoper
+-vvv options) and/or an strace output of the bug.
 
-Thanks !
+
+Changelogs:
+-----------
+
+03/2011 : 0.2 version adding capabilities, IPv6 support and many fixes.
+11/2010 : 0.1 version adding better network handling.
+10/2010 : first public release.
+
+
+Thanks for using SSToPer !
+
