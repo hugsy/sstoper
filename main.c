@@ -72,13 +72,13 @@ void xlog(int type, const char* fmt, ...)
   struct tm *tm;
   char time_buf[128];
 
-  if (type != LOG_INFO) 
-    {   
+  /* if (type != LOG_INFO)  */
+    /* {    */
       t = time(NULL);
       tm = localtime(&t);
       strftime(time_buf, 128, "%F %T", tm);
       fprintf(stderr, "%s  ", time_buf);
-    }
+    /* } */
   
   switch (type) 
     {
@@ -91,8 +91,9 @@ void xlog(int type, const char* fmt, ...)
     case LOG_WARNING:
       fprintf(stderr, "[!] ");
       break;
-
     case LOG_INFO:
+      fprintf(stderr, "[+] ");
+      break;
     default :
       break;
     }
@@ -344,7 +345,7 @@ void check_default_arg(char** argument, char* default_value)
 {
   if ((*argument) == NULL)
     {
-      xlog(LOG_WARNING, "Using default value: %s\n", default_value);
+      xlog(LOG_WARNING, "Using default value: '%s'\n", default_value);
       *argument = default_value;
     }
 }
@@ -368,11 +369,9 @@ sock_t init_tcp()
   hostinfo.ai_protocol = 0;
   sock = -1;
   
-  xlog(LOG_INFO, "Connecting to %s:%s ", cfg->server, cfg->port);
-
   if (cfg->proxy)
     {
-      xlog(LOG_INFO, "Through proxy %s:%s ", cfg->proxy, cfg->proxy_port);
+      xlog(LOG_INFO, "Using proxy %s:%s\n", cfg->proxy, cfg->proxy_port);
       host = cfg->proxy;
       port = cfg->proxy_port;
     }
@@ -381,11 +380,10 @@ sock_t init_tcp()
       host = cfg->server;
       port = cfg->port;
     }
-  xlog(LOG_INFO, "\n");
 
   if (getaddrinfo(host, port, &hostinfo, &res) < 0)
     {
-      xlog(LOG_INFO, "getaddrinfo failed\n");
+      xlog(LOG_ERROR, "getaddrinfo failed\n");
       if (cfg->verbose > 2)
 	xlog(LOG_DEBUG, "%s\n", strerror(errno));
       
@@ -422,7 +420,7 @@ sock_t init_tcp()
     }
   else 
     {
-      xlog(LOG_INFO, "Connected\n");
+      xlog(LOG_INFO,"Connected to %s:%s\n", host, port);
       
       if (cfg->verbose > 2)
 	xlog(LOG_DEBUG, "Using fd %ld\n", sock);
@@ -592,6 +590,7 @@ int is_cap(cap_value_t flag)
 {
   cap_t caps = NULL;
   cap_flag_value_t cap_status = 0;
+  int retcode;
   
   caps = cap_get_proc();
 
@@ -604,29 +603,29 @@ int is_cap(cap_value_t flag)
   if (cap_get_flag(caps, flag, CAP_EFFECTIVE , &cap_status) == -1) 
     {
       xlog(LOG_ERROR, "Failed to get flag\n");
+      cap_free(caps);      
       return -1;
     }
 
   switch (cap_status) 
     {
     case CAP_SET:
-      if (cfg->verbose > 1)
-	xlog(LOG_INFO, "CAP_KILL capability set\n");
-      return TRUE;
+      retcode = TRUE;
+      break;
       
     case CAP_CLEAR:
-      if (cfg->verbose > 1)
-	xlog(LOG_INFO, "CAP_KILL capability not set\n");
-      return FALSE;
-     }
-  
+    default:
+      retcode = FALSE;
+      break;
+    }
+
   if (cap_free(caps) == -1)
     {
       xlog(LOG_ERROR, "Fail to free caps\n");
       return -1;
     }
 
-  return -1;
+  return retcode;
 }
 
 
@@ -799,18 +798,14 @@ void sighandle(int signum)
  * Change user
  * 
  * @param user: username to switch to
- * @param final: if TRUE, it won't be possible to re-gain root privs
  * @return 0 if all good, -1 otherwise
  */
-int change_user(char* user, int final) 
+int change_user(char* user) 
 {
   struct passwd* pw_entry;
   int retcode = 0;
-  int (*DROP)();
   
   pw_entry = getpwnam(user);
-  if (cfg->verbose)
-    xlog(LOG_INFO, "Switch user to '%s'\n", user);
   
   if (!pw_entry)
     {
@@ -819,12 +814,7 @@ int change_user(char* user, int final)
       return -1;     
     }
 
-  if (final)
-    DROP = &setuid;
-  else
-    DROP = &seteuid;
-  
-  retcode = DROP(pw_entry->pw_uid);
+  retcode = setuid(pw_entry->pw_uid);
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to drop privilege, exit\n");
@@ -853,23 +843,47 @@ int main (int argc, char** argv, char** envp)
 {
   struct sigaction saction;
   int retcode;
-
+  pid_t pid = -1;
+  
   
 #if !defined  __linux__
   xlog (LOG_ERROR, "Operating system not supported\n");
   return EXIT_FAILURE;
 #endif
 
-  /* check  */
-  if (getuid()) 
-    {
-      xlog (LOG_ERROR, "pppd requires %s to be executed with root privileges.\n", argv[0]);
-      usage(argv[0], EXIT_FAILURE);
-    }
-  
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
     
   parse_options(cfg, argc, argv);
+
+
+  if (getuid() != 0 || geteuid() != 0)
+    {
+      /* got root ? */
+      xlog (LOG_DEBUG, "%s is not running as root. Using capabilities\n",
+	    argv[0]);
+      
+      /* or is capable ? *MUST* have KILL and SETEUID */
+      retcode = is_cap(CAP_KILL);
+      if (retcode != TRUE) 
+	{
+	  xlog(LOG_ERROR, "Process not KILL capable. Check your privileges.\n");
+	  goto end;
+	}
+      retcode = is_cap(CAP_SETUID);
+      if (retcode != TRUE) 
+	{
+	  xlog(LOG_ERROR, "Process is not SETEUID capable. Check your privileges.\n");
+	  goto end;
+	}
+
+    }
+  else 
+    {
+      xlog (LOG_WARNING,
+	    "%s is running as root. This could be potentially dangerous\n"
+	    "You should consider using capabilities.\n",
+	    argv[0]);
+    }
   
   check_required_arg(cfg->server);
   check_required_arg(cfg->username);
@@ -906,20 +920,20 @@ int main (int argc, char** argv, char** envp)
     check_default_arg(&cfg->proxy_port, "8080");
   
   if (cfg->proxy_port && !cfg->proxy)
-    xlog(LOG_INFO, "No PROXYHOST specified for PROXYPORT '%s'. Dropping.\n", cfg->proxy_port);
+    xlog(LOG_ERROR, "No PROXYHOST specified for PROXYPORT '%s'. Dropping.\n",
+	 cfg->proxy_port);
   
   retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "Failed to access ppp binary.\n");
       goto end;
-      xfree(cfg);
-      return EXIT_FAILURE;
     }
 
   if (cfg->verbose)
     xlog(LOG_INFO, "Verbose level: %d\n", cfg->verbose);
 
+  
   /* catch signal */
   memset(&saction, 0, sizeof(struct sigaction));
   saction.sa_handler = sighandle;
@@ -935,8 +949,8 @@ int main (int argc, char** argv, char** envp)
   /* main starts here */
   if (cfg->daemon) 
     {
-      if (cfg->verbose)
-	xlog(LOG_INFO, "Starting daemon (send SIGINT to close properly)\n");
+      if (cfg->verbose > 1)
+	xlog(LOG_DEBUG, "Starting daemon (send SIGINT to close properly)\n");
 
       if (daemon(0, 0) < 0)
 	{
@@ -945,9 +959,10 @@ int main (int argc, char** argv, char** envp)
 	}
     }
   
-  if (cfg->verbose)
-    xlog (LOG_INFO, "Starting %s as %d\n", argv[0], getpid());
+  if (cfg->verbose > 1)
+    xlog (LOG_DEBUG, "Starting %s as %d\n", argv[0], getpid());
 
+  /* create socket  */
   sockfd = init_tcp(); 
   if (sockfd < 0) 
     {
@@ -962,17 +977,35 @@ int main (int argc, char** argv, char** envp)
       if (retcode < 0)
 	goto end;
     }
-  
-  retcode = init_tls_session(sockfd, &tls); 
-  if (retcode < 0)
-    {
-      xlog(LOG_ERROR, "TLS session initialization has failed, leaving.\n");
-      goto disco;
-    }
 
   
-  /* create forked pppd process and suspend it */
-  pid_t pid = sstp_fork();
+  /* drop privileges and change user */
+  if (cfg->verbose)
+    xlog(LOG_INFO, "Dropping privileges\n");
+  
+  retcode = chdir(NO_PRIV_DIR);  
+  if (retcode)
+    {
+      xlog(LOG_ERROR, "%s\n", strerror(errno));
+      retcode = -1;
+      goto disco; 
+    }
+  if (cfg->verbose > 1)
+    xlog(LOG_DEBUG, "chdir-ed '%s'\n", NO_PRIV_DIR);
+
+  /* if user is not root, all privileges can be dropped right now */
+  /* otherwise, will be done after way down */
+  if (getuid() != 0) 
+    {
+      retcode = change_user(NO_PRIV_USER);
+      if (retcode < 0)
+	goto disco;
+      if (cfg->verbose > 1)
+	xlog(LOG_DEBUG, "Switch user to '%s'\n", NO_PRIV_USER);
+      }
+  
+  /* create forked pppd process as suspended */
+  pid = sstp_fork();
   if (pid <= 0)
     {
       xlog(LOG_ERROR, "Cannot create pppd process, leaving.\n");
@@ -982,63 +1015,16 @@ int main (int argc, char** argv, char** envp)
   
   if (cfg->verbose)
     xlog (LOG_INFO, "'%s' forked with PID %d\n", cfg->pppd_path, pid);
-  
-
-  /* drop sstoper privileges */
-  retcode = chdir(NO_PRIV_DIR);
-  if (cfg->verbose)
-    xlog(LOG_INFO, "chdir-ed '%s'\n", NO_PRIV_DIR);
-  
-  if (retcode)
-    {
-      xlog(LOG_ERROR, "%s\n", strerror(errno));
-      retcode = -1;
-      goto disco;
-    }
-  
-  retcode = change_user(NO_PRIV_USER, FALSE);
-  if (retcode < 0) 
-    goto disco;
 
   
-  /* acquire CAP_SETUID to be able to drop privs later */ 
-  retcode = set_cap(CAP_SETUID);
+  /* wrap socket with tls socket */
+  retcode = init_tls_session(sockfd, &tls); 
   if (retcode < 0)
-    goto disco;
-
-  
-  /* acquire CAP_KILL to send USR1 once negociation is done */ 
-  retcode = is_cap(CAP_KILL);
-  switch(retcode)
     {
-    case FALSE:
-      retcode = set_cap(CAP_KILL);
-      if (retcode < 0)
-	goto disco;
-
-      retcode = is_cap(CAP_KILL);
-      if (retcode != TRUE)
-	{
-	  xlog(LOG_ERROR, "Failed to position CAP_KILL flags\n");
-	  retcode = -1;
-	  goto disco;
-	}
-      
-      break;
-
-    case TRUE:
-      if (cfg->verbose > 1)
-	xlog(LOG_INFO, "Process is already capable\n");
-      break;
-
-    default:
-      xlog(LOG_ERROR, "Failed to get capabilities flags\n");
-      retcode = -1;
+      xlog(LOG_ERROR, "TLS session initialization has failed, leaving.\n");
       goto disco;
     }
-  
-  /* here, sstoper is nobody and has no privilege but CAP_KILL cap */
-  
+
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating HTTPS negociation\n");
   
@@ -1048,16 +1034,44 @@ int main (int argc, char** argv, char** envp)
       xlog(LOG_ERROR, "An error occured in HTTPS negociation, leaving.\n");
       goto disco;
     }
-    
+
+  
+  /* wake up pppd */
+  retcode = kill(pid, SIGUSR1);
+  if (retcode < 0) 
+    {
+      xlog(LOG_ERROR, "[FATAL] Failed to send signal %d to PID:%d\n", SIGUSR1, pid);
+      if (cfg->verbose > 1)
+	xlog(LOG_ERROR, "Reason: %s\n", strerror(errno));
       
+      retcode = -1;
+      goto disco;
+    }
+
+  
+  /* if sstoper was launched as root, we can drop privs here */
+  if (getuid() == 0) 
+    {
+      retcode = change_user(NO_PRIV_USER);
+      if (retcode < 0)
+	goto disco;
+      if (cfg->verbose > 1)
+	xlog(LOG_DEBUG, "Switch user to '%s'\n", NO_PRIV_USER);
+    }
+
+  /* start sstp session */
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating SSTP negociation\n");
+
+  sleep(1);
   
   sstp_loop(pid);
 
-  
  disco:
-  retcode = !retcode ? EXIT_SUCCESS : EXIT_FAILURE; 
+  if (pid > 0)
+    kill(pid, SIGKILL);
+  
+  retcode = !retcode ? EXIT_SUCCESS : EXIT_FAILURE;
   end_tls_session(retcode);
   
  end :

@@ -34,6 +34,8 @@
 #define TRUE 1
 #define FALSE 0
 
+#define MAX_LINE_LENGTH 128
+
 /* System properties */
 #define __UNSIGNED_LONG_LONG_MAX__ (~0ULL)
    

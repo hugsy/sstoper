@@ -48,7 +48,12 @@ described like this
 .LP
 3. fork with correct parameters to pppd*. 
 
-(* Since pppd requires root privilege, so does sstoper).
+* pppd 'noauth' option is a mandatory option that requires pppd to be executed
+  as root. sstoper can be executed under root UID but this is deprecated for
+  security reason. As a consequence, sstoper must running under with GID group
+  with CAP_SETUID and CAP_KILL privileges (automatically set up with "make
+  install" command).
+  
 
 
 .SH COMMAND LINE OPTIONS
@@ -122,7 +127,7 @@ standard library, Debian Lenny.
 .TP
 .B MS SSTP Specification
 \fIhttp://msdn.microsoft.com/en-us/library/cc247338(PROT.10).aspx\fR
-Release v20100820.
+Release v20110318.
 
 .SH AUTHORS
 This tool has been written by Christophe Alladoum. 
@@ -132,7 +137,7 @@ If any bug or misbehaviour is observed, or to suggest enhancement, please email
 me at < christophe __DOT__ alladoum __AT__ hsc __DOT__ fr >
 Thanks !
 
-.SH COPYRIGHT
+.SH COPYRIGHT/COPYLEFT
 SSToPer is release under GPLv2 license.
 .LP
 SSTP is copyrighted by (c) 2010 Microsoft Corporation.

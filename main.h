@@ -91,5 +91,5 @@ int init_tls_session();
 int check_tls_session();
 void end_tls_session(int);
 int getpassword( const char*);
-int change_user(char*, int);
+int change_user(char*);
 

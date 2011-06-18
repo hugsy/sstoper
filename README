@@ -26,9 +26,12 @@ with the synchronous HDLC serial encoding capability enabled.
 
 Current SSToPer version DOES NOT support certification validation.
 
-It must be considered that SSToPer does not require root privilege but pppd
-requires it. As a consequence, SSToPer will use Linux capability and drop
-privilege to nobody user as soon as pppd process is started.
+SSToPer spawns a pppd instance with noauth option that requires root
+privilege. Hence, SSToPer must either be started as root, or have CAP_SETKILL
+and CAP_SETUID. This can be done as root :
+{{{
+$ su -c "setcap cap_setuid,cap_kill+eip ./sstoper"
+}}}
 
 
 Features:
@@ -36,7 +39,7 @@ Features:
 
 - Establishes PPP based VPN through SSTP
 - Proxy 
-- HMAC-256 support
+- HMAC-128/256 support
 - (Opt.) Wireshark SSTP dissector provided to analyse SSTP behaviour
 
 
@@ -47,7 +50,7 @@ Pre-requisites:
 - libgnutls (for gnutls.h and other)
 - libbsd (for util.h)
 - HDLC-sync capable pppd must be installed
-- root privileges
+- root privileges on a 2.6 Linux kernel
 
 
 Todo:
@@ -87,30 +90,50 @@ SSTP Session example:
 - un-tar and compile sstoper
 {{{
 $ tar xf sstoper.tar.gz
-$ cd sstoper && make 
+$ cd sstoper && make
+$ su -c "make install"
 }}}
 
-- execute (example values are given below)
+`install` directive will install sstoper binary by properly setting capabilities
+so that it can be executed by any user.
+
+- Execution with SSToPer with Linux capabilities
 {{{
-$ sudo ./sstoper -s tweety.looney -c misc/vpn.tweety.looney.crt -U user1 
-Password: 
-2011-04-12 16:33:45  [!] Using default value: 443
-2011-04-12 16:33:45  [!] Using default value: /usr/sbin/pppd
-Connecting to tweety.looney:443 
-Connected
-SSTP link established
+$ sstoper -s tweety.looney -c misc/vpn.tweety.looney.crt -U user1 -vv
+Password:
+[...]
+2011-06-18 03:07:20  [!] Using default value: '443'
+2011-06-18 03:07:20  [!] Using default value: '/usr/sbin/pppd'
+2011-06-18 03:07:20  [+] Verbose level: 2
+2011-06-18 03:07:20  [*] Starting ./sstoper as 7789
+2011-06-18 03:07:20  [+] Connected to tweety:443
+2011-06-18 03:07:20  [+] Dropping privileges
+2011-06-18 03:07:20  [*] chdir-ed '/var/empty'
+2011-06-18 03:07:20  [*] Switch user to 'nobody'
+2011-06-18 03:07:20  [+] '/usr/sbin/pppd' forked with PID 7790
+2011-06-18 03:07:20  [*] [7790] Waiting for SIGUSR1
+[...]
+2011-06-18 03:07:27  [*]  --> 112 bytes
+2011-06-18 03:07:27  [+] status: CLIENT_CONNECT_ACK_RECEIVED (0x2) -> CLIENT_CALL_CONNECTED (0x3)
+2011-06-18 03:07:27  [+] SSTP link established
+2011-06-18 03:07:27  [*]  --> 8 bytes
+2011-06-18 03:07:27  [*]  --> 22 bytes
+[...]
 
 (Hit Ctrl-C to close connection)
 
-^C2011-04-12 16:35:39  [-] sstp_loop: Interrupted system call
-Waiting for /usr/sbin/pppd process (PID:7908) to end
+2011-06-18 03:07:44  [+] SSTP connection time: 22 sec
+2011-06-18 03:07:44  [+] Sent 986 bytes, received 894 bytes
+2011-06-18 03:07:44  [+] End of TLS connection, reason: Success.
 $ 
 }}}
 
-Incrementing verbose option (0-3) will display more connection events.
+Incrementing verbose option (0-3) will display more connection events. Level 3
+will expose low-level details, such as crypto algorithm negociation, key
+exchange, etc.
 
 Actually working on Linux (tested Debian & Fedora), other system to be
-supported.
+supported. 
 
 
 Comments/Bugs:
@@ -123,6 +146,7 @@ Please send me back comments and bugs to
 Changelogs:
 -----------
 
+06/2011 : 0.21 few bug fixes
 03/2011 : 0.2 version adding capabilities, IPv6 support and many fixes.
 11/2010 : 0.1 version adding better network handling.
 10/2010 : first public release.

@@ -79,8 +79,8 @@ void generate_guid(char data[])
   data4 = (rand() + 1) * (sizeof(uint32_t) * 8);
   snprintf(data, 38, "{%.4X-%.2X-%.2X-%.4X}", data1, data2, data3, data4);
 
-  if (cfg->verbose > 1)
-    xlog(LOG_INFO, "Using GUID %s\n", data);
+  if (cfg->verbose > 2)
+    xlog(LOG_DEBUG, "Using GUID %s\n", data);
 }
 
 
@@ -198,11 +198,11 @@ int https_session_negociation()
       
   if (rbytes > 0)
     {
-      if (cfg->verbose > 1) 
+      if (cfg->verbose) 
 	{
 	  xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
 	  
-	  if (cfg->verbose > 2)
+	  if (cfg->verbose > 1)
 	    xlog(LOG_DEBUG , "Received: %s\n", buf);
 	}
       
@@ -210,7 +210,7 @@ int https_session_negociation()
     }
   else if (rbytes == 0)
     {
-      xlog(LOG_INFO , "Connection closed.\n");
+      xlog(LOG_INFO, "Connection closed with %s.\n", cfg->server);
       return -1;
     }
   else 
@@ -222,10 +222,10 @@ int https_session_negociation()
   if (strncmp(buf, "HTTP/1.1 200", 12))
     {
       xlog(LOG_ERROR, "Incorrect HTTP response header\n");
-      if (cfg->verbose > 1)
+      if (cfg->verbose > 2)
 	{
 	  buf[1023] = '\0';
-	  xlog(LOG_INFO, buf);
+	  xlog(LOG_DEBUG, buf);
 	}
       
       return -1;
@@ -283,7 +283,6 @@ void sstp_loop(pid_t pppd_pid)
   ctx->state = CLIENT_CALL_DISCONNECTED;
   ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
   ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
-  /* ctx->pppd_pid = -1; */
   ctx->pppd_pid = pppd_pid;
   
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
@@ -335,12 +334,13 @@ void sstp_loop(pid_t pppd_pid)
 	  
 	  else if (rbytes == 0) 
 	    {
-	      xlog(LOG_INFO, "sstp_loop: EOF\n");
+	      if (cfg->verbose)
+		xlog(LOG_INFO, "sstp_loop: EOF\n");
 	    }
 		  
 	  else 
 	    {
-	      if (cfg->verbose > 1)
+	      if (cfg->verbose)
 		xlog(LOG_INFO,"<--  %lu bytes\n", rbytes);
 
 	      sess->rx_bytes += rbytes;
@@ -353,15 +353,16 @@ void sstp_loop(pid_t pppd_pid)
     }
 
   if (ctx->pppd_pid > 0) 
-    {	  
-      xlog(LOG_INFO, "Waiting for %s process (PID:%d) to end\n",
-	   cfg->pppd_path, ctx->pppd_pid);
+    {
+      if (cfg->verbose)
+	xlog(LOG_INFO, "Waiting for %s process (PID:%d) to end\n",
+	     cfg->pppd_path, ctx->pppd_pid);
       
       kill(ctx->pppd_pid, SIGINT);
       waitpid(ctx->pppd_pid, &retcode, 0);
       
       if (retcode)
-	xlog(LOG_INFO, "Failed to quit pppd, retcode %d\n", retcode);
+	xlog(LOG_ERROR, "Failed to quit pppd, retcode %d\n", retcode);
     }
 
   msg_type = ctx->flags & REMOTE_DISCONNECTION ? SSTP_MSG_CALL_DISCONNECT_ACK : SSTP_MSG_CALL_DISCONNECT; 
@@ -374,8 +375,15 @@ void sstp_loop(pid_t pppd_pid)
 
   if (cfg->verbose)
     {
-      xlog(LOG_INFO, "SSTP connection time: %lu sec\n", (sess->tv_end.tv_sec - sess->tv_start.tv_sec));
-      xlog(LOG_INFO, "Sent %lu bytes, received %lu bytes\n", sess->rx_bytes, sess->tx_bytes);
+      unsigned int session_time = sess->tv_end.tv_sec - sess->tv_start.tv_sec;
+      
+      xlog(LOG_INFO, "SSTP session duration: %lu sec\n", session_time);
+      xlog(LOG_INFO, "Sent %lu bytes (avg: %.2f B/s), received %lu bytes (avg: %.2f B/s)\n",
+	   sess->rx_bytes,
+	   (float)(sess->rx_bytes/session_time),
+	   sess->tx_bytes,
+	   (float)(sess->tx_bytes/session_time)
+	   );
     }
 
   xfree(chap_ctx);
@@ -408,8 +416,8 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 
   is_control = is_control_packet(sstp_header);
   
-  if (cfg->verbose > 1)
-    xlog(LOG_INFO, "\t-> %s packet\n", is_control ? "Control" : "Data");
+  if (cfg->verbose > 2)
+    xlog(LOG_DEBUG, "\t-> %s packet\n", is_control ? "Control" : "Data");
 
   sstp_length -= sizeof(sstp_header_t);
   if (sstp_length <= 0)
@@ -424,7 +432,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       sstp_control_header_t* control_header;
       uint16_t control_type, control_num_attributes;
       void* attribute_ptr;
-      /* struct passwd* pw_entry; */
       
       control_header = (sstp_control_header_t*) (rbuffer + sizeof(sstp_header_t));
       control_type = ntohs( control_header->message_type );
@@ -448,12 +455,12 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
       
       
       /* parsing control header */
-      if (cfg->verbose > 1)
+      if (cfg->verbose > 2)
 	{
-	  xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
+	  xlog(LOG_DEBUG, "\t-> type: %s (%#.2x)\n",
 	       control_messages_types_str[control_type], control_type);
-	  xlog(LOG_INFO, "\t-> attribute number: %d\n", control_num_attributes);
-	  xlog(LOG_INFO, "\t-> length: %d\n", (sstp_header->length - sizeof(sstp_header_t)));
+	  xlog(LOG_DEBUG, "\t-> attribute number: %d\n", control_num_attributes);
+	  xlog(LOG_DEBUG, "\t-> length: %d\n", (sstp_header->length - sizeof(sstp_header_t)));
 	}
       
       switch (control_type)
@@ -461,21 +468,6 @@ int sstp_decode(void* rbuffer, ssize_t sstp_length)
 	case SSTP_MSG_CALL_CONNECT_ACK:
 	  retcode = sstp_decode_attributes(control_num_attributes, attribute_ptr, sstp_length);
 	  if (retcode < 0) return -1;
-
-	  if (cfg->verbose > 1)
-	    xlog(LOG_INFO, "%d: sending SIGUSR1 to %d\n", getpid(), ctx->pppd_pid);
-	  
-	  retcode = kill(ctx->pppd_pid, SIGUSR1);
-	  if (retcode < 0)
-	    {
-	      xlog(LOG_ERROR, "kill failed : %s\n", strerror(errno));
-	      return -1;
-	    }
-
-	  /* drop forever all root privileges */
-	  retcode = change_user(NO_PRIV_USER, TRUE);
-	  if (retcode < 0) 
-	    return -1;
 
 	  break;
 	    
@@ -657,10 +649,10 @@ int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
 	}
       
       /* parsing attribute header */
-      if (cfg->verbose > 1)
+      if (cfg->verbose > 2)
 	{
-	  xlog(LOG_INFO, "\t\t--> attr_id\t%s (%#.2x)\n",attr_types_str[attribute_id], attribute_id);
-	  xlog(LOG_INFO, "\t\t--> len\t\t%d bytes\n", attribute_length);
+	  xlog(LOG_DEBUG, "\t\t--> attr_id\t%s (%#.2x)\n",attr_types_str[attribute_id], attribute_id);
+	  xlog(LOG_DEBUG, "\t\t--> len\t\t%d bytes\n", attribute_length);
 	}
 
       switch (attribute_id)
@@ -715,7 +707,7 @@ void sstp_send(void* data, size_t data_length)
 
   sess->tx_bytes += sbytes;
   
-  if (cfg->verbose > 1)
+  if (cfg->verbose)
     xlog(LOG_INFO, " --> %lu bytes\n", sbytes);
   
 }
@@ -809,13 +801,13 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
   control_header.message_type = htons(msg_type);
   control_header.num_attributes = htons(attribute_number);
 
-  if (cfg->verbose > 1)
+  if (cfg->verbose > 2)
     {
-      xlog(LOG_INFO, "\t-> Control packet\n");
-      xlog(LOG_INFO, "\t-> type: %s (%#.2x)\n",
+      xlog(LOG_DEBUG, "\t-> Control packet\n");
+      xlog(LOG_DEBUG, "\t-> type: %s (%#.2x)\n",
 	   control_messages_types_str[msg_type], msg_type);
-      xlog(LOG_INFO, "\t-> attribute number: %d\n", attribute_number);
-      xlog(LOG_INFO, "\t-> length: %d\n", control_length);
+      xlog(LOG_DEBUG, "\t-> attribute number: %d\n", attribute_number);
+      xlog(LOG_DEBUG, "\t-> length: %d\n", control_length);
     }
 
 
@@ -831,12 +823,12 @@ void send_sstp_control_packet(uint16_t msg_type, void* attributes,
       sstp_attribute_header_t* cur_attr = (sstp_attribute_header_t*)attr_ptr;
       uint16_t plen = ntohs(cur_attr->packet_length);
 
-      if (cfg->verbose > 1)
+      if (cfg->verbose > 2)
 	{
-	  xlog(LOG_INFO, "\t\t--> Attribute %d\n", i);
-	  xlog(LOG_INFO, "\t\t--> type: %s (%x)\n",
+	  xlog(LOG_DEBUG, "\t\t--> Attribute %d\n", i);
+	  xlog(LOG_DEBUG, "\t\t--> type: %s (%x)\n",
 	       attr_types_str[cur_attr->attribute_id], cur_attr->attribute_id);
-	  xlog(LOG_INFO, "\t\t--> length: %d\n", plen);
+	  xlog(LOG_DEBUG, "\t\t--> length: %d\n", plen);
 	}
       
       memcpy(data_ptr, attr_ptr, plen);
@@ -1003,7 +995,6 @@ int crypto_set_certhash()
  */
 int crypto_set_cmac()
 { 
-  unsigned int i = 0;
   uint16_t hash_len;
   unsigned char Call_Connected_buffer[112];
   
@@ -1100,64 +1091,74 @@ int crypto_set_cmac()
 
   
   /* Verbose output displays brief crypto information */
-  if (cfg->verbose > 1)
+  if (cfg->verbose > 2)
     {
-      xlog(LOG_INFO, "\t\t--> hash algo\t%s (%#.2x)\n",
+      int i=0;
+      char dbg_msg[MAX_LINE_LENGTH];
+
+      /* display hash algorithm */
+      xlog(LOG_DEBUG, "\t\t--> Hash algorithm\t%s (%#.2x)\n",
 	   crypto_req_attrs_str[ctx->hash_algorithm], ctx->hash_algorithm);
-      
-      xlog(LOG_INFO, "\t\t--> nonce\t0x");
-      for (i=0; i<8; i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->nonce[i]));
-      xlog(LOG_INFO, "\n");
 
-      xlog(LOG_INFO, "\t\t--> CA hash\t0x");
-      for(i=0; i<8; i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->certhash[i]));
-      xlog(LOG_INFO, "\n");
+      /* display nonce sent by server for authentication */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<8; i++) snprintf(dbg_msg+(i*8), 8, "%.8x", ntohl(ctx->nonce[i]));
+      xlog(LOG_DEBUG, "\t\t--> nonce\t0x%s\n", dbg_msg);
 
-      /* debug output is much more verbose */
-      if (cfg->verbose > 2)
-	{
-	  xlog(LOG_INFO, "\t\t--> T1 msg\t0x");
-	  for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", msg[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> H(Pwd)\t0x");
-	  for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHash[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> H(H)\t0x");
-	  for (i=0; i<MD4_DIGEST_LENGTH; i++) xlog(LOG_INFO, "%.2x", PasswordHashHash[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> NT_Rsp\t0x");
-	  for (i=0; i<24; i++) xlog(LOG_INFO, "%.2x", NT_Response[i]);
-	  xlog(LOG_INFO, "\n");
+      /* display certificate hash */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for(i=0; i<8; i++) snprintf(dbg_msg+(i*8), 8, "%.8x", ntohl(ctx->certhash[i]));
+      xlog(LOG_DEBUG, "\t\t--> CA Hash\t0x%s\n", dbg_msg);
 
-	  xlog(LOG_INFO, "\t\t--> MKey\t0x");
-	  for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Key[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> S_Key\t0x");
-	  for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Send_Key[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> R_Key\t0x");
-	  for (i=0; i<16; i++) xlog(LOG_INFO, "%.2x", Master_Receive_Key[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> HLAK\t0x");
-	  for (i=0; i<32; i++) xlog(LOG_INFO, "%.2x", hlak[i]);
-	  xlog(LOG_INFO, "\n");
-	  
-	  xlog(LOG_INFO, "\t\t--> CMKey\t0x");
-	  for(i=0;i<8;i++) xlog(LOG_INFO, "%.8x", ntohl(ctx->cmk[i]));
-	  xlog(LOG_INFO, "\n");
-	  
-	}
-            
-      xlog(LOG_INFO, "\t\t--> CMac\t0x");
-      for(i=0; i<8; i++)
-	xlog(LOG_INFO, "%.8x", ntohl(ctx->cmac[i]));
-      xlog(LOG_INFO, "\n");
+      /* display T1 message */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<32; i++) xlog(LOG_DEBUG, "%.2x", msg[i]);
+      xlog(LOG_DEBUG, "\t\t--> T1 msg\t0x%s\n", dbg_msg);
+
+      /* display user's password hashed with MD4 */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", PasswordHash[i]);
+      xlog(LOG_DEBUG, "\t\t--> H(Pwd)\t0x%s\n", dbg_msg);
+
+      /* display user's password hash hashed with MD4 */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", PasswordHashHash[i]);
+      xlog(LOG_DEBUG, "\t\t--> H(H)\t0x%s\n", dbg_msg);
+
+      /* display NT Authentication Response code  */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<24; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", NT_Response[i]);
+      xlog(LOG_DEBUG, "\t\t--> NT Response code\t0x%s\n", dbg_msg);
+
+      /* display Master Key which will be used to generate all session keys */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<16; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", Master_Key[i]);
+      xlog(LOG_DEBUG, "\t\t--> Master Key\t0x%s\n", dbg_msg);
+
+      /* display Send Key derivated from Master Key */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<16; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", Master_Send_Key[i]);
+      xlog(LOG_DEBUG, "\t\t--> Send Key\t0x%s\n", dbg_msg);
+
+      /* display Receive Key derivated from Master Key */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<16; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", Master_Receive_Key[i]);
+      xlog(LOG_DEBUG, "\t\t--> Receive Key\t0x%s\n", dbg_msg);
+
+      /* display Higher Level Authentication Key */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for (i=0; i<32; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", hlak[i]);
+      xlog(LOG_DEBUG, "\t\t--> HLAK\t0x%s\n", dbg_msg);
+
+      /* display Compound MAC  */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for(i=0; i<8; i++) snprintf(dbg_msg+(i*8), 8, "%.8x", ntohl(ctx->cmac[i]));
+      xlog(LOG_DEBUG, "\t\t--> CMac\t0x%s\n", dbg_msg);
+
+      /* display Compound MAC Key used by PPP */
+      memset(dbg_msg, 0, MAX_LINE_LENGTH);
+      for(i=0;i<8;i++) snprintf(dbg_msg+(i*2), 2, "%.8x", ntohl(ctx->cmk[i]));
+      xlog(LOG_DEBUG, "\t\t--> CMKey\t0x%s\n", dbg_msg);
       
     }
 
@@ -1193,11 +1194,11 @@ int attribute_status_info(void* data, uint16_t attr_len)
       return -1;
     }
 
-  if (cfg->verbose > 1)
+  if (cfg->verbose > 2)
     {  
       /* show attribute */
-      xlog(LOG_INFO, "\t\t--> attr_ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
-      xlog(LOG_INFO, "\t\t--> status\t%s (%#.2x)\n", attrib_status_str[status], status);
+      xlog(LOG_DEBUG, "\t\t--> attr_ref\t%s (%#.2x)\n", attr_types_str[attribute_id], attribute_id);
+      xlog(LOG_DEBUG, "\t\t--> status\t%s (%#.2x)\n", attrib_status_str[status], status);
     }
   
   if (ctx->state != CLIENT_CONNECT_REQUEST_SENT)
@@ -1210,7 +1211,8 @@ int attribute_status_info(void* data, uint16_t attr_len)
     {
       uint32_t attrib_value;
       attrib_value = ntohl(*((uint32_t*)data + rbytes));
-      xlog(LOG_INFO, "\t\t--> attribute value: %#.4x\n", attrib_value);
+      if (cfg->verbose > 2)
+	xlog(LOG_DEBUG, "\t\t--> attribute value: %#.4x\n", attrib_value);
       rbytes += sizeof(uint32_t);
     }
   
@@ -1270,16 +1272,6 @@ int sstp_fork()
     }
  
   pppd_args[i++] = NULL;
-
-  if (cfg->verbose > 2)
-    {
-      char *ptr;
-      i = 0;
-
-      xlog(LOG_INFO, "execv-ing ");
-      while ((ptr = pppd_args[i++])) xlog(LOG_INFO, "%s ", ptr);
-      xlog(LOG_INFO, "\n");
-    }
   
   memset(&pty, 0, sizeof(struct termios));
   pty.c_cc[VMIN] = 1;
@@ -1294,10 +1286,11 @@ int sstp_fork()
     }
 
   ppp_pid = fork();
+  
       
   if (ppp_pid > 0)
     {
-     
+      
       dup2(amaster, 0);
       dup2(amaster, 1);
       
@@ -1316,6 +1309,9 @@ int sstp_fork()
       sigemptyset(&zeromask);    
       sigemptyset(&newmask);
       sigaddset(&newmask, SIGUSR1);
+
+      if (cfg->verbose > 1)
+	xlog(LOG_DEBUG, "[%d] Waiting for SIGUSR1\n", getpid());
       
       if (sigprocmask(SIG_BLOCK, &newmask, &oldmask) < 0)
 	{
@@ -1335,7 +1331,7 @@ int sstp_fork()
 	}
 
       
-      /* spawn pppd */
+      /* close fds */
       close(sockfd);
       
       dup2(aslave, 0);
@@ -1344,19 +1340,54 @@ int sstp_fork()
       if (aslave > 2) close (aslave);
       if (amaster > 2) close (amaster);
 
+      if (getuid()!=0) 
+	{
+	  if (setuid(0) < 0)
+	    {
+	      xlog(LOG_ERROR, "%s\n", strerror(errno));
+	      return -1;
+	    }
+
+	  /* raise power */
+	  if (cfg->verbose > 1)
+	    xlog(LOG_DEBUG, "[%d] Promoted to UID %d\n", getpid(), getuid());
+	}
       
+      /* spawn pppd */
+      if (cfg->verbose > 1)
+	{
+	  int i = 0, max_len = MAX_LINE_LENGTH;
+	  char cmdline[max_len], *ptr=NULL;
+	  
+	  memset(cmdline, 0, max_len);
+	  max_len--;
+	  
+	  while ((ptr = pppd_args[i++])) {
+	    max_len -= strlen(ptr);
+	    if (max_len < 0) break;
+	    strncat(cmdline, ptr, max_len);
+	    
+	    max_len--;
+	    if (max_len < 0) break;
+	    strncat(cmdline, " ", max_len);
+	  }
+	  xlog(LOG_DEBUG, "execv-ing '%s'\n", cmdline);
+	}
+      
+      /* yield to pppd */
       if (execv (pppd_path, pppd_args) == -1)
 	{
 	  xlog (LOG_ERROR, "sstp_fork: execv: %s\n", strerror(errno));
 	  return -1;
 	}
+      
     }
 
   else 
     {
       xlog (LOG_ERROR, "sstp_fork: you should never be here\n");
       if (cfg->verbose > 1)
-	xlog(LOG_INFO,": %s\n", strerror(errno));
+	xlog(LOG_ERROR,"FATAL: %s\n", strerror(errno));
       set_client_status(CLIENT_CALL_DISCONNECTED);
       
       return -1;
