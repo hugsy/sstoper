@@ -8,7 +8,7 @@
 
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
-VERSION		=	0.2
+VERSION		=	0.21
 ARCH		=	$(shell uname)
 DEBUG		=	1
 
