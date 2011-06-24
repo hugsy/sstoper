@@ -1320,9 +1320,22 @@ int sstp_fork()
 	}
 
       while (do_loop)
-	sigsuspend(&zeromask);
+	{
+	  retcode = sigsuspend(&zeromask);
+	  
+	  if (errno == EFAULT)
+	    {
+	      xlog(LOG_ERROR, "sstp_fork : sigsuspend failed\n");
+	      if (cfg->verbose)
+		{
+		  xlog(LOG_DEBUG, strerror(errno));
+		}
+ 	      close(sockfd);
+	      return -1;
+	    };
+	}
 
-      do_loop = FALSE;
+      /* do_loop = FALSE; */
       
       if (sigprocmask(SIG_SETMASK, &oldmask, NULL) < 0)
 	{

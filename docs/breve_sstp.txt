@@ -1,0 +1,199 @@
+===================================[ Analyse du protocole SSTP de Microsoft ]===
+======================================================[ Christophe Alladoum ]===
+================================================[ Hervé Schauer Consultants ]===
+===============================================[ christophe.alladoum@hsc.fr ]===
+
+
+===[0x00 Résumé ]===============================================================
+Cette brève analyse le protocole SSTP, son fonctionnement et le client Linux
+associé, SSToPer. Enfin, une dernière partie révèle quelques attaques menées
+contre SSTP.
+
+
+===[0x01 Introduction ]=========================================================
+A partir de Windows Server 2008, Microsoft intègre un nouveau mécanisme
+d'établissement de connexion VPN. L'objectif de ce nouveau protocole, nommé SSTP
+- pour Secure Socket Tunneling Protocol - est d'établir une connexion PPP
+encapsulée dans une couche SSL assurant confidentialité et intégrité.
+
+La sortie de Windows Server 2008 a vu l'apparition de nombreuses nouvelles
+fonctionnalités. Parmi celles-ci, un nouveau protocole réseau a été implémenté,
+avec pour objectif de faciliter grandement la création de tunnel VPN, pouvant
+facilement être véhiculé dans des serveurs HTTP mandataires (proxy Web), mais
+également de pouvoir passer plus facilement les pare-feu.
+
+Pour cela, le protocole SSTP a été développé, dont le fonctionnement va se
+rapproche beaucoup du fonctionnement de SSLTunnel, puisque la couche SSTP
+encapsulera dans une connexion HTTP over SSL (HTTPs) les octets de la connexion
+VPN par le protocole PPP.
+
+Cette brève revient sur le fonctionnement détaillé du protocole SSTP, notamment
+son établissement de connexion à partir d'une simple connexion SSL, jusqu'à
+l'ouverture d'une session PPP.
+La deuxième partie explique l'utilisation du client Linux développé pour SSTP,
+SSToPer.
+La troisième partie aborde quelques tentatives d'attaques menées sur le
+protocole SSTP et son implémentation côté serveur.
+
+
+===[0x02 Fonctionnement du protocole ]===========================================
+Pour pouvoir passer plus facilement les contraintes des pare-feu, une session
+SSTP va s'initier tout d'abord en ouvrant une socket SSL vers le serveur
+destination sur le port (par défaut) 443/tcp en simulant une connexion HTTP
+spéciale. Une fois faite, la couche SSTP se substituera à HTTP pour encapsuler
+les octets PPP.
+
+
+====[0000 Schéma de la pile SSTP ]==============================================
+
+
+		  		 					  +--------------------+
+									  |                    |
+								  	  |      PPP           |
+			  						  |                    |
+   +-------------------+    		  +--------------------+
+   |                   |   			  |                    |
+   |    HTTP           |   			  |      SSTP          |
+   |                   |   			  |                    |
+   +-------------------+   			  +--------------------+
+   |                   |   			  |                    |
+   |     SSL           |   			  |      SSL           |
+   |                   |   			  |                    |
+   +-------------------+  			  +--------------------+
+   |                   |  			  |                    |
+   |     TCP           |  			  |      TCP           |
+   |                   |  			  |                    |
+   +-------------------+  			  +--------------------+
+   |                   |  			  |                    |
+   |     IP            |  			  |       IP           |
+   |                   |  			  |                    |
+   +-------------------+  			  +--------------------+
+
+    Pile d'encapsulation			   Pile d'encapsulation
+    d'initialisation HTTP			    d'une session SSTP
+
+
+	
+=====[0001 Négociation HTTP ]===================================================
+Cette requête est décrite ci-dessous:
+
+- Méthode : SSTP_DUPLEX_POST
+- Chemin URI : /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/
+- Version du protocole HTTP : HTTP/1.1
+- Host: <nom_du_serveur>**
+
+2 entêtes HTTP supplémentaires spéciaux viennent se greffer à la requête:
+- SSTPCORRELATIONID: {<GUID>}**
+- Content-Length: 18446744073709551615
+
+** : champs dynamiques
+Le champ Host recevra le nom du serveur (comme une requête HTTP classique), et
+le SSTPCORRELATIONID possèdera un identifiant unique de connexion (GUID).
+
+Cette unique requête HTTP permettra d'isoler aisément un serveur IIS gérant le
+SSTP par son retour(**), à savoir 200 OK; les serveurs n'implémentant pas cette
+méthode répondant par des codes divers :
+{{{
+$ openssl s_client -connect 192.168.51.1:443
+SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1
+[...]
+HTTP/1.1 413 Request Entity Too Large
+Date: Fri, 24 Jun 2011 13:05:03 GMT
+Server: Apache/2.2.8 (Ubuntu)
+[...]
+}}}
+
+Les serveur IIS sachant gérer le SSTP (le protocole n'étant pas installé par
+défaut), seront ensuite en attente de la négociation SSTP.
+
+{{{
+$ openssl s_client -connect 192.168.51.1:443
+SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1
+Host: tweety.looney
+SSTPCORRELATIONID: {62DFA5C0-E2E0-FD50-D286B00}
+Content-Length: 18446744073709551615
+
+
+HTTP/1.1 200 
+Content-Length: 18446744073709551615
+Server: Microsoft-HTTPAPI/2.0
+Date: Fri, 24 Jun 2011 13:10:59 GMT
+}}}
+
+(**: ce comportement est celui utilisé par le script [0x##fixme##] pour détecter
+un serveur SSTP).
+
+
+=====[0010 Négociation SSTP ]===================================================
+
+=====[0011 Session SSTP ]=======================================================
+
+=====[0010 Fermeture de session ]===============================================
+
+===[0x04 SSToPer ]==============================================================
+SSToPer est un client Linux pour le protocole SSTP ou plus exactement une
+implémentation de la couche SSTP nécessaire à l'établissement de la connexion
+VPN vers un Windows 2008+. SSToPer va donc se charger de faire tous les
+mécanismes de négociation SSTP, puis cède la main au processus pppd(8)[x] en
+encapsulant les paquets PPP dans des messages SSTP_DATA_PACKET via un
+openvty(3). 
+
+Pour être exécuté, SSToPer n'a besoin que des identifiant et mot de passe de
+l'utilisateur à authentifier, le FQDN ou son adresse IP, ainsi que son
+certificat au format PEM. Ce dernier peut être récupéré par le script
+SSTP_reveal.py [0x0b - 0001]
+
+SSToPer vérifie le bon passage des paramètres puis initie la négociation HTTP
+dans une socket SSL. 
+{{{
+> SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1
+> Host: tweety.looney
+> SSTPCORRELATIONID: {897950C0-2CD0-D280-20450C00}
+> Content-Length: 18446744073709551615
+>
+>
+
+< HTTP/1.1 200 
+< Content-Length: 18446744073709551615
+< Server: Microsoft-HTTPAPI/2.0
+< Date: Fri, 24 Jun 2011 09:06:14 GMT
+< 
+}}}
+
+Le processus décrit en 0x02-0010 va se dérouler par SSToPer qui a perdu tous ses
+privilèges (utilisateur nobody). Les parties chiffrement et authentification
+NTLM sont également gérées par SSToPer. A la fin de cette négociation SSTP,
+SSToPer réveille son fils par un SIGUSR1 créant ainsi l'instance pppd(8).
+
+A partir de ce moment, le process SSToPer agit comme un relai pour encapsuler
+les octets provenant de pppd(8) dans des messages de données SSTP elles-mêmes
+encapsulées dans du SSL. Le principe de fonctionnement a été inspiré de l'outil
+SSLTunnel[x].
+
+Enfin, en cas de demande de déconnexion du serveur ou du client, SSToPer envoie
+le message SSTP_MSG_CALL_DISCONNECT et attend la bonne fin du processus pppd(8).
+
+
+===[0x05 Attaques SSTP ]========================================================
+
+===[0x06 Conclusion ]===========================================================
+
+===[0x0a Références ]===========================================================
+
+[x] - SSTP Protocol Specification -
+	http://msdn.microsoft.com/en-us/library/cc247338(PROT.10).aspx
+	
+[x] - SSLTunnel - http://www.hsc.fr/##fixme##
+
+[x] - pppd(8) - http://ppp.samba.org/
+
+
+===[0x0b Snippets ]=============================================================
+
+=====[0001 SSTP_reveal.py ]=====================================================
+
+### fixme ###
+
+=====[0002 SSTP_Sulley_Fuzzer.py ]==============================================
+
+### fixme ###

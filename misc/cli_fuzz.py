@@ -7,10 +7,8 @@
 
 from socket import socket, getaddrinfo, AF_UNSPEC, SOCK_STREAM, error as SOCKError
 from ssl import wrap_socket, PROTOCOL_TLSv1, CERT_NONE, SSLError
-from os import getuid
 from sys import argv
 from random import randint
-from utils import INFO, ERR, OK
 from datetime import datetime
 from sys import stdout, stderr
 
@@ -37,29 +35,15 @@ def ERR(msg):
     stderr.flush()
 
     
-def get_fuzzy(max_len):
-    return "".join([ chr(randint(0, 255)) for x in xrange(randint(0, max_len)) ])
 
 
 if len(argv) > 1:
-    HOST = argv[1]
-else :
-    HOST = "vpn.tweety.looney"
+    print("usage: python %s <target_ip_addr>" % argv[0])
+    exit(1)
     
+HOST = argv[1]
 PORT = 443
-# neg = """
-# {0} {1} HTTP/1.1\r
-# Host: {2}\r
-# SSTPCORRELATIONID: {3}\r
-# Content-Length: {4}\r
-# {5}\r
-# """.format("SSTP_DUPLEX_POST",
-           # "/sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/",
-           # HOST,
-           # "1",
-           # "1",
-           # ""
-           # )
+
 neg = """
 SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r
 Host: %s\r
