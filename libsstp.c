@@ -311,10 +311,11 @@ void sstp_loop(pid_t pppd_pid)
       
       if (ctx->pppd_pid > 0 && FD_ISSET(0, &rcv_fd)) 
 	{
-	  char rbuffer[PPP_MAX_MTU];
+	  char rbuffer[PPP_MAX_MRU];
 	  ssize_t rbytes = -1;
-
-	  rbytes = read(0, rbuffer, PPP_MAX_MTU);
+	  memset(rbuffer, 0 , PPP_MAX_MRU);
+	  
+	  rbytes = read(0, rbuffer, PPP_MAX_MRU);
 	  if (rbytes > 0)
 	    send_sstp_data_packet(rbuffer, rbytes);
 	}
@@ -323,6 +324,7 @@ void sstp_loop(pid_t pppd_pid)
 	{
 	  char rbuffer[PPP_MAX_MRU];
 	  ssize_t rbytes;
+	  memset(rbuffer, 0 , PPP_MAX_MRU);
 	  
 	  rbytes = gnutls_record_recv (tls, rbuffer, PPP_MAX_MRU);
 	  if (rbytes < 0)
@@ -1040,7 +1042,7 @@ int crypto_set_cmac()
    * For MS-CHAPv2, SSTP Client HLAK = MasterReceiveKey | MasterSendKey
    */
   memcpy(hlak, Master_Receive_Key, 16*sizeof(uint8_t));
-  memcpy(hlak + 16, Master_Send_Key, 16*sizeof(uint8_t));
+  memcpy(hlak+16, Master_Send_Key, 16*sizeof(uint8_t));
 
   /*
    * Computing CMAC:
@@ -1091,77 +1093,78 @@ int crypto_set_cmac()
 
   
   /* Verbose output displays brief crypto information */
+  #ifdef DEBUG
   if (cfg->verbose > 2)
     {
+
       int i=0;
       char dbg_msg[MAX_LINE_LENGTH];
 
       /* display hash algorithm */
-      xlog(LOG_DEBUG, "\t\t--> Hash algorithm\t%s (%#.2x)\n",
-	   crypto_req_attrs_str[ctx->hash_algorithm], ctx->hash_algorithm);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t%s (%#2x)\n",
+	   "Hash algorithm", crypto_req_attrs_str[ctx->hash_algorithm], ctx->hash_algorithm);
 
       /* display nonce sent by server for authentication */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<8; i++) snprintf(dbg_msg+(i*8), 8, "%.8x", ntohl(ctx->nonce[i]));
-      xlog(LOG_DEBUG, "\t\t--> nonce\t0x%s\n", dbg_msg);
+      for (i=0; i<8; i++) snprintf(dbg_msg+(i*8), 9, "%8x", ntohl(ctx->nonce[i]));
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "Nonce", dbg_msg);
 
       /* display certificate hash */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for(i=0; i<8; i++) snprintf(dbg_msg+(i*8), 8, "%.8x", ntohl(ctx->certhash[i]));
-      xlog(LOG_DEBUG, "\t\t--> CA Hash\t0x%s\n", dbg_msg);
+      for(i=0; i<8; i++) snprintf(dbg_msg+(i*8), 9, "%8x", ntohl(ctx->certhash[i]));
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "CA Hash", dbg_msg);
 
       /* display T1 message */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<32; i++) xlog(LOG_DEBUG, "%.2x", msg[i]);
-      xlog(LOG_DEBUG, "\t\t--> T1 msg\t0x%s\n", dbg_msg);
+      for (i=0; i<32; i++) snprintf(dbg_msg+i,3, "%2x", msg[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "T1 msg", dbg_msg);
 
       /* display user's password hashed with MD4 */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<MD4_DIGEST_LENGTH; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", PasswordHash[i]);
-      xlog(LOG_DEBUG, "\t\t--> H(Pwd)\t0x%s\n", dbg_msg);
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) snprintf(dbg_msg+i, 3, "%2x", PasswordHash[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "H(Password)", dbg_msg);
 
       /* display user's password hash hashed with MD4 */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<MD4_DIGEST_LENGTH; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", PasswordHashHash[i]);
-      xlog(LOG_DEBUG, "\t\t--> H(H)\t0x%s\n", dbg_msg);
+      for (i=0; i<MD4_DIGEST_LENGTH; i++) snprintf(dbg_msg+i, 3, "%2x", PasswordHashHash[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "H(H(Password))", dbg_msg);
 
       /* display NT Authentication Response code  */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<24; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", NT_Response[i]);
-      xlog(LOG_DEBUG, "\t\t--> NT Response code\t0x%s\n", dbg_msg);
+      for (i=0; i<24; i++) snprintf(dbg_msg+i, 3, "%2x", NT_Response[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "NT Response code", dbg_msg);
 
       /* display Master Key which will be used to generate all session keys */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<16; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", Master_Key[i]);
-      xlog(LOG_DEBUG, "\t\t--> Master Key\t0x%s\n", dbg_msg);
+      for (i=0; i<16; i++) snprintf(dbg_msg+i, 3, "%2x", Master_Key[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "Master Key", dbg_msg);
 
       /* display Send Key derivated from Master Key */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<16; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", Master_Send_Key[i]);
-      xlog(LOG_DEBUG, "\t\t--> Send Key\t0x%s\n", dbg_msg);
+      for (i=0; i<16; i++) snprintf(dbg_msg+i, 3, "%2x", Master_Send_Key[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "Master Send Key", dbg_msg);
 
       /* display Receive Key derivated from Master Key */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<16; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", Master_Receive_Key[i]);
-      xlog(LOG_DEBUG, "\t\t--> Receive Key\t0x%s\n", dbg_msg);
+      for (i=0; i<16; i++) snprintf(dbg_msg+i, 3, "%2x", Master_Receive_Key[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "Master Receive Key", dbg_msg);
 
       /* display Higher Level Authentication Key */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for (i=0; i<32; i++) snprintf(dbg_msg+(i*2), 2, "%.2x", hlak[i]);
-      xlog(LOG_DEBUG, "\t\t--> HLAK\t0x%s\n", dbg_msg);
+      for (i=0; i<32; i++) snprintf(dbg_msg+i, 3, "%2x", hlak[i]);
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "HLAK", dbg_msg);
 
       /* display Compound MAC  */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for(i=0; i<8; i++) snprintf(dbg_msg+(i*8), 8, "%.8x", ntohl(ctx->cmac[i]));
-      xlog(LOG_DEBUG, "\t\t--> CMac\t0x%s\n", dbg_msg);
+      for(i=0; i<8; i++) snprintf(dbg_msg+(i*8), 9, "%8x", ntohl(ctx->cmac[i]));
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "CMac", dbg_msg);
 
       /* display Compound MAC Key used by PPP */
       memset(dbg_msg, 0, MAX_LINE_LENGTH);
-      for(i=0;i<8;i++) snprintf(dbg_msg+(i*2), 2, "%.8x", ntohl(ctx->cmk[i]));
-      xlog(LOG_DEBUG, "\t\t--> CMKey\t0x%s\n", dbg_msg);
-      
+      for(i=0;i<8;i++) snprintf(dbg_msg+(i*8), 9, "%8x", ntohl(ctx->cmk[i]));
+      xlog(LOG_DEBUG, "[Crypto debug] %-20s\t0x%s\n", "CMK", dbg_msg);
     }
-
+#endif
   /* disable negociation timer */
   alarm(0);
   ctx->flags &= ~NEGOCIATION_TIMER_RAISED;
@@ -1221,12 +1224,11 @@ int attribute_status_info(void* data, uint16_t attr_len)
 
 
 /**
- * Based on ssl_ppp_fork() in ssltunnel-1.18/client/main.c
- * Alain Thivillon (Herve Schauer Consultants)
+ * Based on ssl_ppp_fork() in SSLTunnel
  *
  * Prepare pppd options and execute pppd daemon in a fork child. For an obscure
  * reason, probably voodoo, EAP fails while negociation so it has been explicitly
- * deactivated. 1412 byte MRU size is purely empirical and may be changed.
+ * deactivated. 
  *
  * @return child pid if process is the father or error otherwise (execv pppd)
  */
@@ -1240,7 +1242,7 @@ int sstp_fork()
 
   pppd_path = cfg->pppd_path;
   i = 0;
-  
+
   pppd_args[i++] = "pppd";
   pppd_args[i++] = "nodetach";
   pppd_args[i++] = "local";
@@ -1248,9 +1250,10 @@ int sstp_fork()
   pppd_args[i++] = "sync";
   pppd_args[i++] = "refuse-eap"; 
   pppd_args[i++] = "nodeflate";
+  /*
   pppd_args[i++] = "mru";
   pppd_args[i++] = "1412";
-  
+  */
   pppd_args[i++] = "user"; 
   pppd_args[i++] = cfg->username;
   pppd_args[i++] = "password";

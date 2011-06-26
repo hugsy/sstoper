@@ -2,6 +2,7 @@
 # SSToPer Makefile
 #
 # requires :
+# - openssl-devel
 # - libgnutls-devel
 # - libcap-devel
 #
@@ -10,7 +11,7 @@ PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.21
 ARCH		=	$(shell uname)
-DEBUG		=	1
+DEBUG		=	0
 
 CC		=	gcc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
@@ -27,7 +28,7 @@ LIB		= 	-L/usr/lib
 endif
 
 ifeq ($(DEBUG), 1)
-DBGFLAGS	=	-ggdb
+DBGFLAGS	=	-ggdb -D DEBUG
 CFLAGS		+=	$(DBGFLAGS)
 endif
 

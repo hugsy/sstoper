@@ -61,8 +61,10 @@ while True:
     else :
         data = resp.read()
         if len(data) and data.startswith("-----BEGIN CERTIFICATE-----"):
-            print("[+] Found certificate-%d" % i)
-            print ("%s\n" % data)
+            print("[+] Found certificate-%d\n" % i)
+            print("{0}[ CUT HERE ]{0}\n".format("-"*30) )
+            print ("%s" % data)
+            print("{0}[ CUT HERE ]{0}\n".format("-"*30) )
         elif not data.startswith("-----BEGIN CERTIFICATE-----"):
             break
     i += 1
