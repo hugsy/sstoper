@@ -1,0 +1,597 @@
+---------------------[ Analysis Protocol SSTP Microsoft ]-----------------------
+
+
+---[ Abstract ]-----------------------------------------------------------------
+This brief analyzes a new protocol from Microsoft VPN, called SSTP supported by
+NT 6+ Windows family. In this article, we will discuss the nature and the
+overall functionality of the SSTP protocol, which has led to the creation of a
+client running for Linux operating systems, called SSToPer. A final section
+discusses some interesting security perspectives regarding the protocol.
+
+
+---[ 1. Introduction ]----------------------------------------------------------
+Starting from Windows Server 2008, Microsoft introduces a new mechanism for
+VPN connection establishment. This new protocol main purpose, called SSTP
+- standing for Secure Socket Tunneling Protocol - is to establish a PPP
+connection encapsulated in an SSL layer that would ensure confidentiality and
+integrity. SSTP has intended to greatly facilitate VPN tunnel creation, which can
+be relayed through HTTP proxies (web proxy), but also to enhance firewall
+passing, as it pretends to be a pseudo HTTP connection.
+
+SSTP works by creating an HTTP tunnel over SSL which makes its functioning close
+to SSLTunnel [SSLTUNNEL], hence SSTP is not per say a VPN protocol, but it only
+makes it easier to create a VPN connection by PPP, via the encapsulation inside
+an HTTPS layer.
+
+This article goes into the SSTP functioning details, including connection
+establishment from a simple SSL connection, up to the opening of a PPP session. 
+The second part explains Linux client, to better understand SSTP mechanisms.
+The third section discusses the protocol security aspects, and how
+implementations in 2008/Vista/Seven protect themselves from certain well-known
+attacks. Nevertheless, this brief will be limited to the protocol study, and
+will not go into attacks against implementation (client as a server).
+
+
+--- [2. Protocol Operation ]----------------------------------------------------
+To pass more easily constraints that are firewalls, an SSTP session will start
+off first by opening an SSL socket to the server on destination port 443/tcp
+and will simulate an HTTP connection. Once done, SSTP layer will substitute
+to HTTP and encapsulate PPP stream.
+
+This section is devoted to the operation of SSTP based on the specification
+provided on the MSDN site, but has proved to be incomplete in certain respects.
+
+To clarify the explanations, the behaviour will be developed with outputs from
+sstoper and pppd tools. Also, to be as light as possible, it is left to the
+reader's curiosity to review SSToPer source files for full implementation
+details related to the cryptographic part. 
+
+
+----[ 2.1 SSTP Protocol Layers ]------------------------------------------------
+
+
+   +-------------------+
+   |                   |
+   |	PPP 	       |
+   |				   |
+   +-------------------+
+   |                   |
+   |	SSTP 	       |
+   |				   |
+   +-------------------+
+   |                   |
+   |    HTTP           |
+   |                   |
+   +-------------------+
+   |                   |
+   |     SSL           |
+   |                   |
+   +-------------------+
+   |                   |
+   |     TCP/IP        |
+   |                   |
+   +-------------------+
+   
+    Layers of an session SSTP
+
+
+
+----[ 2.2 HTTP negotiation ]----------------------------------------------------
+This initial query structure is very similar to a standard HTTP request, and for
+good reason, since SSTP will effectively be encapsulated inside a tunnel HTTP
+over SSL (HTTPS) to better walk through firewalls. On the server side, IIS will
+yield to the library sstpsvc.dll, the handling of a special resource
+(/{BA195980-CD49 sra_-458B-9E23-C84EE0ADCD75}/ by default).
+
+Full HTTP request detail is described below:
+
+- Method: SSTP_DUPLEX_POST
+- Path URI: /sra_{BA195980-CD49-458B-9E23-C84EE0ADCD75}/
+- HTTP Version: HTTP/1.1
+- Host: *
+
+This is exactly an HTTP header structure. 2 additional HTTP headers are append
+to the query: 
+- SSTPCORRELATIONID {} ​​*
+- Content-Length: 18446744073709551615
+
+*: Dynamic fields
+`Host` field will receive the server name (as in a standard HTTP request), and
+`SSTPCORRELATIONID` field will hold an unique identifier defined by the
+connection client (GUID).
+`Content-Length` field has a constant value, which is 18446744073709551615
+corresponding to the size of "Unsigned Long Long" type.
+
+Only with this single HTTP request, it is fairly easy to isolate an SSTP-capable
+IIS server (**), by analyzing the HTTP return code i.e. 200 OK, or different if
+servers does not implement this method:
+{{{
+$ # Request sent to anApache (Ubuntu)
+$ openssl-connect s_client 192.168.51.1:443
+SSTP_DUPLEX_POST / sra_ {BA195980-CD49-458B-9E23-C84EE0ADCD75} / HTTP/1.1
+[...]
+HTTP/1.1 413 Request Entity Too Large
+Date: Sun, 26 Jun 2011 10:14:54 GMT
+Server: Apache/2.2.8 (Ubuntu)
+[...]
+
+$ # Same to GFE
+HTTP/1.1 405 Method Not Allowed
+Date: Sun, 26 Jun 2011 10:24:10 GMT
+Server: GFE/2.0
+[...]
+
+$ # Same to nginx
+HTTP/1.1 411 Length Required
+Server: nginx/0.7.67
+Date: Sun, 26 Jun 2011 10:26:42 GMT
+[...]
+}}}
+
+IIS servers that can handle SSTP protocol (since SSTP is not installed by
+default), will then be waiting for further negotiations. As SSTP relies on an
+SSL infrastructure, it will be common to find the PKI service called "Active
+Directory Certificate Services" activated. If it is opened and accessible to the
+Internet, a simple little Google-Fu will allow us to list CA services for MS
+Windows 2008. 
+{{{
+inurl: /certsrv/certrqus.asp
+}}}
+
+Then, we can fingerprint a potential SSTP service by sending an initialization
+HTTP request that will tell us whether or not a SSTP service is set up behind.
+{{{
+$ openssl s_client -connect tweety.looney:443
+[...]
+> SSTP_DUPLEX_POST /sra_{BA195980-CD49-458B-9E23-C84EE0ADCD75}/ HTTP/1.1
+> Host: tweety.looney
+> SSTPCORRELATIONID {62DFA5C0-E2E0-FD50-D286B00}
+> Content-Length: 18446744073709551615
+
+
+< HTTP/1.1 200
+< Content-Length: 18446744073709551615
+< Server: Microsoft-HTTPAPI/2.0
+< Date: Sun, 26 Jun 2011 1:10:59 p.m. GMT
+}}}
+
+(**: In particular, this technique is used in the SSTP_reveal.py script 
+[0x08-0001] to detect an SSTP service running on the remote target).
+
+
+-----[ 2.3 Negotiation SSTP ]---------------------------------------------------
+Like any descent protocol, SSTP stack should operate as a finite state automaton.
+
+Two channels are used during the session:
+- a data channel, where PPP layer bytes are encapusulated;
+- a control channel, setting SSTP layer parameters. Control packets are defined
+  by a type, and optionally one or more attributes.
+
+Once HTTPS tunnel is established, SSTP client will send a control message
+connection establishment, SSTP_MSG_CALL_CONNECT_REQUEST with a single
+attribute SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID. This attribute indicates that we
+want to communicate through SSTP. If the server refuses to set up the
+connection, it will return a SSTP_MSG_CALL_CONNECT_NAK control packet to the
+client, closing immediatly the connection. Otherwise, it would send a
+SSTP_MSG_CALL_CONNECT_ACK packet type and hence indicates that it accepts
+incoming connection, and set an attribute, SSTP_ATTRIB_CRYPTO_BINDING_REQ, to
+initiate "Cryptographic Binding" phase.
+
+In this phase, process yields control to pppd [PPPD] to engage PPP negotiation,
+where we can find all the phases of a conventional authentication
+with MS-CHAPv2 protocol. This phase has to proceed successfully for SSTP
+negociation to continue. In the end, SSTP client will have to remember CHAP
+context, which will be modify when MS-CHAPv2 negociation ends.
+{{{
+# log extract from pppd
+Using interface ppp0
+Connect: ppp0 <--> /dev/pts/7
+[...]
+sent [LCP ConfReq id-0x1 <asyncmap 0x0> <magic 0x81f3d98d> <pcomp> <accomp>]
+rcvd [LCP ConfReq id-0x3 <mru 4091> <auth chap MS-v2> <magic 0x20396595> <pcomp> <accomp> <endpoint [local:2a.66.6c.cf.c0.ca.40.98.87.4c.c0.04.cd.c4.bb.7a.00.00.00.00]>]
+sent [LCP ConfAck id-0x3 <mru 4091> <auth chap MS-v2> <magic 0x20396595> <pcomp> <accomp> <endpoint [local:2a.66.6c.cf.c0.ca.40.98.87.4c.c0.04.cd.c4.bb.7a.00.00.00.00]>]
+rcvd [LCP ConfAck id-0x1 <asyncmap 0x0> <magic 0x81f3d98d> <pcomp> <accomp>]
+rcvd [CHAP Challenge id-0x0 <157a62d6f6474e2f6ac71910e4591c1c>, name - "SSTP-Server-2k8"]
+sent [CHAP Response id-0x0 <85e8ee288fdbb4c4f2cde1ae4939d5050000000000000000185e54a534398f956b9b0b985526116227a44585f1f9c5c900>, name - "test-sstp"]
+rcvd [CHAP Success id-0x0 "S-352FC947B3F000F33B87374DEF9448F7ADD50DEC"]
+CHAP authentication succeeded
+}}}
+
+SSTP layer being located between PPP and SSL, it is then easy to monitor
+MS-CHAPv2 authentication inside PPP. If it ends successfully, a response packet
+is sent, containing a field called NT-Response, as described in RFC 2759
+[PPPCHAP], sections 4 and 8. 
+{{{
+4. Response Packet
+[...]
+16 octets: Peer-Challenge
+    8 octets: Reserved, Must Be Zero
+   24 octets: NT-Response
+    1 octet: Flags
+}}}
+
+The NT-Response is located at an offset of 24 bytes in the response packet
+(CHAP Response in the listing above).
+
+{{{
+[...]
+      uint8_t chap_handshake_code - * (uint8_t *) (data + 2);
+      
+      / * If msg IS PPP-CHAP response * /
+      if (chap_handshake_code - 0x02)
+        {
+          memcpy (chap_ctx, data 7, 49);
+        }
+    }
+}}}
+
+
+Using properly initialized CHAP context, SSTP client will then generate 
+5 session keys. This keyring is calculated in an almost identical fashion on the
+client-side and the server-side, with derivation injective functions from the CHAP
+context.
+
+Those keys are:
+- Master Key: This key is calculated with the NT-Response field after the
+  MS-CHAPv2 negotiation of PPP and the MD4(MD4(User_Password));
+  
+- Master Send Key (MSK) and Master Receive Key (MRK), both derived from the
+  Master Key;
+  
+- Higher-Layer Authentication Key (HLAK): for the client, it is the
+  concatenation of MRK then MSK (*);
+  
+- Mac Compound Key (CMK): HMAC-SHAx algorithm (**) will be applied to the string 
+  "SSTP inner method derived CMK", with the HLAK as the key;
+  
+- Compound Mac (Mac): HMAC-SHAx algorithm (**) will be applied to a special block
+  SSTP_CALL_CONNECTED_MSG_ZEROED, with the key being the CMK. This block,
+  SSTP_CALL_CONNECTED_MSG_ZEROED, is the SSTP_CALL_CONNECTED_MSG control packet
+  where CMac field was zero-ed (***).
+
+These keys calculation sequence strictly follows the steps described in [MPPE]
+section 3, "Deriving Session Keys from MS-CHAPv2 Credentials".
+
+Those keys and few other are calculated by the client, and sent to the server in
+a SSTP_MSG_CALL_CONNECTED type control message, with the attribute
+SSTP_ATTRIB_CRYPTO_BINDING. 
+
+From this moment, SSTP session is successfully established, and IP over PPP
+tunnel is ready to communicate. \o/
+
+
+*: SSTP specification provided by Microsoft shows that the HLAK is
+built by the concatenation of MSK | MRK, however SSToPer implementation clearly
+showed that this was instead MRK | MRK. This issue was underlined, but has not
+been followed.
+**: SSTP currently supports HMAC-SHA1 and HMAC-SHA256, negotiated
+beforehand. HMAC-SHA256 is the preferred mode. HMAC-SHA1 negotiation mode
+is identical to HMAC-SHA256, except that HMAC-SHA1 makes a stuffing bytes to
+zero to be correctly aligned to 32 bits. 
+***: This part is only vaguely documented in SSTP specification but is
+necessary to correctly calculate the necessary CMAC authentication. The curious
+reader may refer to sources SSToPer for further explanation.
+
+
+-----[ 2.4 Session SSTP ]---------------------------------------------------------
+When connected, SSTP session is almost passive, where SSTP layer only stands for
+relaying packets received by PPP layer, and encapsulating them inside
+SSTP_DATA_PACKET packet to send to the server.
+On Linux, pppd will create a new interface (by convention named
+pppX, with X being an integer), which will host the IP tunnel. Interface IP address 
+will be provided in an IPCP packet, as shown in pppd event logs. Note then that
+SSTP can also fully work out with IPv6.
+{{{
+sent [IPCP ConfReq id-0x3 <addr 192.168.56.196>]
+rcvd [IPCP ConfAck id-0x3 <addr 192.168.56.196>]
+rcvd [IPCP ConfReq id-0x8 <addr 192.168.56.192>]
+sent [IPCP ConfAck id-0x8 <addr 192.168.56.192>]
+local  IP address 192.168.56.196
+remote IP address 192.168.56.192
+}}}
+
+However, SSTP does not remain completely passive. Indeed, the server sends every
+70 seconds (by default) SSTP_MSG_ECHO_REQUEST packet that are comparable to
+ICMP Echo Request. Therefore, it will be waiting for a response packet
+SSTP_MSG_ECHO_REPONSE from the client to keep the tunnel up. In case of
+timeout, the tunnel will be closed.
+
+{{{
+2011-06-26 14:06:48  [+] <--  8 bytes
+2011-06-26 14:06:48  [*]        -> Control packet
+2011-06-26 14:06:48  [*]        -> type: SSTP_MSG_ECHO_REQUEST (0x08)
+2011-06-26 14:06:48  [*]        -> attribute number: 0
+2011-06-26 14:06:48  [*]        -> length: 4
+
+2011-06-26 14:06:48  [+]  --> 8 bytes
+2011-06-26 14:06:48  [*]        -> Control packet
+2011-06-26 14:06:48  [*]        -> type: SSTP_MSG_ECHO_REPONSE (0x09)
+2011-06-26 14:06:48  [*]        -> attribute number: 0
+2011-06-26 14:06:48  [*]        -> length: 4
+}}}
+
+In the opposite, the client can also trigger this SSTP ping mechanism.
+
+
+-----[ 2.5 Logoff ]-------------------------------------------------------------
+Whether SSTP session is being established or already is, it is possible to close
+the tunnel and deallocate resources allocated by issuing a
+SSTP_MSG_CALL_DISCONNECT type control message, with no attribute.
+{{{
+2011-06-26 15:14:59  [+]  --> 8 bytes
+2011-06-26 15:14:59  [+] Sending SSTP_MSG_CALL_DISCONNECT message.
+2011-06-26 15:14:59  [*]        -> Control packet
+2011-06-26 15:14:59  [*]        -> type: SSTP_MSG_CALL_DISCONNECT (0x06)
+2011-06-26 15:14:59  [*]        -> attribute number: 0
+2011-06-26 15:14:59  [*]        -> length: 4
+}}}
+
+Other end of the tunnel will acknowledge for this request by returning a
+SSTP_MSG_CALL_DISCONNECT_ACK message.
+
+
+---[ 3. SSToPer ]---------------------------------------------------------------
+SSToPer (pronounced "stopper") is an SSTP Linux client or more precisely, an
+SSTP layer implementation to establish a VPN connection to a Windows
+2008+. SSToPer will therefore handle for all SSTP negotiation mechanisms, then
+yields to pppd(8) process[PPPD] by encapsulating PPP packets into messages
+SSTP_DATA_PACKET using openvty(3) call.
+
+To run, SSToPer only requirse username and password for the user to log in, the
+server FQDN or IP address, and the certificate in PEM format. The latter can be
+retrieved with the script SSTP_reveal.py [0x08-0001].
+
+SSToPer checks first the parameters and initiates HTTP negotiation in an SSL
+socket.
+{{{
+> SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1
+> Host: tweety.looney
+> SSTPCORRELATIONID: {897950C0-2CD0-D280-20450C00}
+> Content-Length: 18446744073709551615
+>
+>
+
+< HTTP/1.1 200
+< Content-Length: 18446744073709551615
+< Server: Microsoft-HTTPAPI/2.0
+< Date: Fri, 24 Jun 2011 09:06:14 GMT
+<
+}}}
+
+Steps described in §2.3  will be held by SSToPer running with no privilege. NTLM
+encryption and authentication are also handled by SSToPer.
+
+Via the correct options specified to both SSToPer and PPPD daemon, it is
+possible to follow in full detail the SSTP negotiation different stages.
+
+{{{
+2011-06-29 19:13:31  [*] Switch user to 'nobody'
+2011-06-29 19:13:31  [+] Initiating SSTP negociation
+2011-06-29 19:13:32  [*]      -> Control packet
+2011-06-29 19:13:32  [*]      -> type: SSTP_MSG_CALL_CONNECT_REQUEST (0x01)
+2011-06-29 19:13:32  [*]      -> attribute number: 1
+2011-06-29 19:13:32  [*]      -> length: 10
+2011-06-29 19:13:32  [*]         --> Attribute 0
+2011-06-29 19:13:32  [*]         --> type: SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID (1)
+2011-06-29 19:13:32  [*]         --> length: 6
+2011-06-29 19:13:32  [+]  --> 14 bytes
+2011-06-29 19:13:32  [+] status: CLIENT_CALL_DISCONNECTED (0) -> CLIENT_CONNECT_REQUEST_SENT (0x1)
+2011-06-29 19:13:32  [+]  --> 28 bytes
+2011-06-29 19:13:32  [+] <--  48 bytes
+2011-06-29 19:13:32  [*]      -> Control packet
+2011-06-29 19:13:32  [*]      -> type: SSTP_MSG_CALL_CONNECT_ACK (0x02)
+2011-06-29 19:13:32  [*]      -> attribute number: 1
+2011-06-29 19:13:32  [*]      -> length: 44
+2011-06-29 19:13:32  [*]         --> attr_id     SSTP_ATTRIB_CRYPTO_BINDING_REQ (0x04)
+2011-06-29 19:13:32  [*]         --> len         40 bytes
+2011-06-29 19:13:32  [+] status: CLIENT_CONNECT_REQUEST_SENT (0x1) -> CLIENT_CONNECT_ACK_RECEIVED (0x2)
+}}}
+
+From that moment, SSToPer waits and monitors MS-CHAPv2 negociation. Debug
+options (-D DEBUG flag to the compilation) can be also used to display the
+calculated MS-CHAPv2 context keyring.
+{{{
+2011-06-29 19:20:17  [*] [Crypto debug] Hash algorithm          CERT_HASH_PROTOCOL_SHA256 (0x2)
+2011-06-29 19:20:17  [*] [Crypto debug] Nonce                   0xab65ed2e4c5edf8d4e5836033652be32b10d1240a8734dbd4bf6f17b093db62d
+2011-06-29 19:20:17  [*] [Crypto debug] CA Hash                 0x69f6c50f7e2647994c2d7dbff1b6beee1f3553daa5a399513a03bfa44e6808bc
+2011-06-29 19:20:17  [*] [Crypto debug] T1 msg                  0x555526666726676662667676624442001
+2011-06-29 19:20:17  [*] [Crypto debug] H(Password)             0x962af1484337b0ad6
+2011-06-29 19:20:17  [*] [Crypto debug] H(H(Password))          0x1bde8c9fe46e33098
+2011-06-29 19:20:17  [*] [Crypto debug] NT Response code        0x2965dd5a72ce058248213056f
+2011-06-29 19:20:17  [*] [Crypto debug] Master Key              0xee3f85b74647db9f6
+2011-06-29 19:20:17  [*] [Crypto debug] Master Send Key         0x84bb3a5db4bc66d58
+2011-06-29 19:20:17  [*] [Crypto debug] Master Receive Key      0x68caaa530195c0d1c
+2011-06-29 19:20:17  [*] [Crypto debug] HLAK                    0x68caaa530195c0d184bb3a5db4bc66d58
+2011-06-29 19:20:17  [*] [Crypto debug] CMac                    0x0786229e78be73d132510996eab9806bb01524340f19bbdb142958c13af62ca1
+2011-06-29 19:20:17  [*] [Crypto debug] CMK                     0xd8563831ac0a0e61f969ffc9cfba69f613755a2e6177db09989e36405473d71e
+2011-06-29 19:20:17  [*]        -> Control packet
+2011-06-29 19:20:17  [*]        -> type: SSTP_MSG_CALL_CONNECTED (0x04)
+2011-06-29 19:20:17  [*]        -> attribute number: 1
+2011-06-29 19:20:17  [*]        -> length: 108
+2011-06-29 19:20:17  [*]           --> Attribute 0
+2011-06-29 19:20:17  [*]           --> type: SSTP_ATTRIB_CRYPTO_BINDING (3)
+2011-06-29 19:20:17  [*]           --> length: 104
+2011-06-29 19:20:17  [+]  --> 112 bytes
+}}}
+
+Here, SSTP connection is established and the process acts SSToPer as a relay to
+wrap the bytes from pppd(8) in SSTP messages, themselves encapsulated in
+SSL. This functioning is quite similar to the tool SSLTunnel [SSLTUNNEL], plus
+ping mechanism management described in §2.5.
+
+{{{{
+2011-06-29 19:13:43  [+] status: CLIENT_CONNECT_ACK_RECEIVED (0x2) -> CLIENT_CALL_CONNECTED (0x3)
+2011-06-29 19:13:43  [+] SSTP link established
+2011-06-29 19:13:43  [*]        -> Control packet
+2011-06-29 19:13:43  [*]        -> type: SSTP_MSG_ECHO_REQUEST (0x08)
+2011-06-29 19:13:43  [*]        -> attribute number: 0
+2011-06-29 19:13:43  [*]        -> length: 4
+2011-06-29 19:13:43  [+]  --> 8 bytes
+2011-06-29 19:13:43  [+] <--  32 bytes
+2011-06-29 19:13:43  [*]        -> Data packet
+2011-06-29 19:13:43  [+] <--  8 bytes
+2011-06-29 19:13:43  [*]        -> Control packet
+2011-06-29 19:13:43  [*]        -> type: SSTP_MSG_ECHO_REPONSE (0x09)
+2011-06-29 19:13:43  [*]        -> attribute number: 0
+2011-06-29 19:13:43  [*]        -> length: 4
+2011-06-29 19:13:43  [+]  --> 22 bytes
+}}}
+
+
+Finally, if a disconnection request is sent by the server or client, SSToPer
+sends a SSTP_MSG_CALL_DISCONNECT message and waits for aproper process pppd(8)
+ending.
+
+About the implementation, SSToPer is only meant for Linux kernel 2.6+, since
+it relies on capabilities mechanisms (man capabilities) to limit its privileges
+as much as possible. In fact, SSToPer almost has no need for elevated
+privileges. Thus, there is no need to launch sstoper as root. Makefile
+installation will take care of creating a dedicated group, named sstoper, and
+set the appropriate capabilities upon the binary (as does Wireshark for
+instance). Running SSToPer as root will bring up a warning message.
+{{{
+$ sudo ./sstoper -s 172.16.0.3 -U test-sstp -P SSTP_Wins_1234 -c /tmp/2k8r2.cer
+2011-06-26 12:42:45  [!] ./sstoper is running as root. This could be potentially dangerous
+You should consider using capabilities.
+[...]
+}}}
+
+sstoper(8) man details all available other options.
+
+
+---[ 4. SSTP Security ]---------------------------------------------------------
+Conceptually, SSTP is supposed to resist against well-known attacks:
+- SSL interception: Windows Vista/Seven native client will refuse an
+  SSL connection where server certificate cannot be validated. It should be
+  noted that this setting (and all parameters SSTP on client-side) may be
+  changed in
+  HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\SstpSvc and
+  HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\SstpSvc\Parameters.
+  Keys options are detailed in [SSTPOPTIONS].
+
+- Man-In-The-Middle: Crypto Binding mechanism described above, is to prevent
+  MITM attacks as the server will validate the information sent by the client
+  using negotiated keys; keys that can not be calculated without knowledge of
+  user password and NT-Response Authentication MS-CHAPv2.
+
+In other words, a major part of SSTP security based on the correct deployment of
+the SSL infrastructure, since MS Vista and Seven native clients will require
+valid certificates.
+Curiously, we note that SSTP server may deliberately choose to disable SSL via
+Windows registry, which obviously makes communication much more vulnerable, but
+facilitates greatly its study with a network sniffer such as Wireshark.
+
+
+---[ 5. Conclusion ]------------------------------------------------------------
+In this article, we explained back on its detailed operating mode which was used
+for implementing a Linux client called SSToPer; and we also discussed few matter
+of security mechanisms around the protocol.
+
+Even though used technologies are not novel (PPP, SSL, etc..), and since the
+great number of encapsulation reduces the flow capacity (ratio of effectively
+sent bytes over the wire, for one byte sent by application), SSTP is also
+interesting in its way to facilitate to bypass firewall constraints and allowing
+tunnel to be created through HTTP proxy. 
+
+
+							  -- Christophe Alladoum
+
+
+
+---[ 6. References ]------------------------------------------------------------
+
+
+[Httptunnel] - httptunnel - http://www.nocrew.org/software/httptunnel.html
+
+[MPPE] - Deriving Keys for use with Microsoft Point-to-Point Encryption -
+http://tools.ietf.org/search/rfc3079
+
+[PPPCHAP] - Microsoft PPP CHAP Extensions, Version 2 -
+http://tools.ietf.org/search/rfc2759
+
+[PPPD] - pppd (8) - http://ppp.samba.org/
+
+[SSLTUNNEL] - SSLTunnel - http://www.hsc.fr/ressources/outils/ssltunnel/
+
+[SSTP] - SSTP Protocol Specification -
+http://msdn.microsoft.com/en-us/library/cc247338 (PROT.10). aspx
+
+[SSTPOPTIONS] - http://support.microsoft.com/kb/947054
+
+
+---[ 7. Misc ]------------------------------------------------------------------
+This snippet can also be found in SSToPer tar file, in ./misc/ directory.
+
+
+-----[ 7.1. SSTP_reveal.py ]------------------------------------------------------
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# 
+# SSTP Server revealer: probes for SSTP service on the target
+#   - Christophe Alladoum
+#
+
+from socket import socket
+from ssl import wrap_socket
+from sys import argv
+from httplib import HTTPConnection
+
+if len(argv) != 2:
+    print("usage: python %s <target_ip_addr>" % argv[0])
+    exit(1)
+    
+HOST = argv[1]
+PORT = 443   # SSTP default port
+http_neg = """
+SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r
+Host: %s\r
+SSTPCORRELATIONID: {62DFA5C0-E2E0-FD50-D286B00}\r
+Content-Length: 18446744073709551615\r
+\r
+""" % HOST
+
+sock = socket()
+sock.connect((HOST, PORT))
+ssl_sock = wrap_socket(sock)
+active = False
+
+if ssl_sock is None:
+    print ("[!] Failed to create socket")
+    exit(1)
+
+ssl_sock.write(http_neg)
+data = ssl_sock.read()
+
+if "HTTP/1.1 200" in data:
+    print("[+] SSTP seams active.")
+    active = True
+else :
+    print("[-] No SSTP service detected")
+    
+if ssl_sock:
+    ssl_sock.close()
+
+if not active :
+    exit(0)
+
+print("[+] Trying to download certificate")
+i = 0
+while True:
+    http = HTTPConnection(HOST)
+    http.request("GET", "/certsrv/certnew.cer?ReqID=CACert&Renewal=%d&Enc=b64" % i)
+    resp = http.getresponse()
+    
+    if (resp.status != 200):
+        break
+    else :
+        data = resp.read()
+        if len(data) and data.startswith("-----BEGIN CERTIFICATE-----"):
+            print("[+] Found certificate-%d\n" % i)
+            print("{0}[ CUT HERE ]{0}\n".format("-"*30) )
+            print ("%s" % data)
+            print("{0}[ CUT HERE ]{0}\n".format("-"*30) )
+        elif not data.startswith("-----BEGIN CERTIFICATE-----"):
+            break
+    i += 1
+exit(0)
