@@ -5,17 +5,17 @@
  *
  *            GNU GENERAL PUBLIC LICENSE
  *              Version 2, June 1991
- * 
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (
  * at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
@@ -48,7 +48,7 @@ typedef int sock_t;
 #define SIZE_MAX ~((size_t)1)
 #endif
 
-enum 
+enum
   {
     LOG_DEBUG = 0,
     LOG_INFO,
@@ -56,12 +56,12 @@ enum
     LOG_ERROR,
   };
 
-typedef struct 
+typedef struct
 {
   int verbose;
   int daemon;
   char* server;
-  char* port;  
+  char* port;
   char* ca_file;
   char* username;
   char* password;
@@ -72,9 +72,17 @@ typedef struct
   char* proxy_port;
 } sstp_config;
 
+#ifdef HAS_GNUTLS
 gnutls_session_t tls;
 gnutls_x509_crt_t certificate;
 gnutls_certificate_credentials_t creds;
+#else
+entropy_context entropy;
+ctr_drbg_context ctr_drbg;
+ssl_context tls;
+x509_crt certificate;
+#endif
+
 sock_t sockfd;
 sstp_config *cfg;
 int do_loop;
@@ -82,14 +90,6 @@ int do_loop;
 
 extern int snprintf (char *__restrict __s, size_t __maxlen, __const char *__restrict __format, ...);
 
-void xlog(int type, const char* fmt, ...); 
+void xlog(int type, const char* fmt, ...);
 void* xmalloc(size_t size);
 void xfree(void*);
-
-sock_t init_tcp();
-int init_tls_session();
-int check_tls_session();
-void end_tls_session(int);
-int getpassword( const char*);
-int change_user(char*);
-

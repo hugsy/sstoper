@@ -9,17 +9,20 @@
 
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
-VERSION		=	0.21
+VERSION		=	0.30
 ARCH		=	$(shell uname)
 DEBUG		=	0
 
-CC		=	gcc
+CC		=	cc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
-INC		= 	-I/usr/include 
-CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB)
-LDFLAGS		= 	-lcrypto -lutil -lgnutls -lcap
-OBJECTS		=	main.o libsstp.o
+INC		= 	-I/usr/include
+CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB) -fstack-protector-all -fPIE
+LDFLAGS		= 	-lcrypto -lutil  -lcap -Wl,-z,relro -pie
+OBJECTS		=	main.o libsstp.o pem2der.o
 BIN		=	sstoper
+
+HAS_GNUTLS	= 	0
+HAS_POLARSSL	= 	1
 
 ifeq ($(shell uname -m), x86_64)
 LIB		= 	-L/usr/lib64
@@ -32,12 +35,21 @@ DBGFLAGS	=	-ggdb -D DEBUG
 CFLAGS		+=	$(DBGFLAGS)
 endif
 
+ifeq ($(HAS_POLARSSL), 1)
+CFLAGS		+=	-DHAS_POLARSSL
+LDFLAGS		+=	-lpolarssl
+else
+CFLAGS		+=	-DHAS_GNUTLS
+LDFLAGS		+=	-lgnutls
+endif
+
 ARGS		= 	-s tweety -c /tmp/certnew.cer -U test-sstp -P Hello1234 -vv
 
 SSTOPER_USR	= 	root
 SSTOPER_GRP	= 	sstoper
 
-.PHONY : clean all valgrind release snapshot check-syntax 
+
+.PHONY : clean all valgrind release snapshot check-syntax
 
 .c.o :
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -45,17 +57,17 @@ SSTOPER_GRP	= 	sstoper
 all : $(BIN)
 
 $(BIN) : $(OBJECTS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) 
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean :
-	rm -fr $(OBJECTS) $(BIN) *~ *swp \#*\# *.core pppd_log ./docs/$(BIN).8.gz
+	rm -fr -- $(OBJECTS) $(BIN) *~ *swp \#*\# *.core pppd_log ./docs/$(BIN).8.gz /tmp/sstoper-*
 
 valgrind:  $(BIN)
 	valgrind --leak-check=full --show-reachable=yes ./$(BIN) $(ARGS)
 
 snapshot: clean
 	git add . && git ci -m "$(shell date): Generating snapshot release" && \
-	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ HEAD |gzip > /tmp/$(BIN)-latest.tgz 
+	git archive --format=tar --prefix=$(BIN)-$(VERSION)/ HEAD |gzip > /tmp/$(BIN)-latest.tgz
 
 release: clean
 	git add . && git ci -m "$(shell date): Generating stable release" && \

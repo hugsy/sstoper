@@ -5,17 +5,17 @@
  *
  *            GNU GENERAL PUBLIC LICENSE
  *              Version 2, June 1991
- * 
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (
  * at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
@@ -38,11 +38,11 @@
 
 /* System properties */
 #define __UNSIGNED_LONG_LONG_MAX__ (~0ULL)
-   
+
 /* SSTP Properties */
 #define SSTP_HTTPS_RESOURCE "/sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/"
 #define SSTP_VERSION 0x10
-#define SSTP_MIN_LEN 4 
+#define SSTP_MIN_LEN 4
 #define SSTP_MAX_ATTR 256
 #define SSTP_NEGOCIATION_TIMER 60
 #define SSTP_PING_TIMER 30
@@ -56,10 +56,10 @@
 #define PPP_MAX_MRU 4096
 
 #define NO_PRIV_USER "nobody"
-#define NO_PRIV_DIR "/var/empty"
+#define NO_PRIV_DIR "/tmp/sstoper-XXXXXX"
 
 /* SSTP Packet Type */
-enum packet_types 
+enum packet_types
   {
     SSTP_DATA_PACKET = 0x00,
     SSTP_CONTROL_PACKET = 0x01
@@ -67,7 +67,7 @@ enum packet_types
 
 
 /* SSTP Protocol Type */
-enum sstp_encapsulated_protocol_types 
+enum sstp_encapsulated_protocol_types
   {
     SSTP_ENCAPSULATED_PROTOCOL_PPP = 0x0001
   };
@@ -101,7 +101,7 @@ const static UNUSED char* control_messages_types_str[] =
 
 
 /* SSTP Attribute Message Type */
-enum attr_types 
+enum attr_types
   {
     SSTP_ATTRIB_NO_ERROR = 0x00,
     SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID = 0x01,
@@ -111,7 +111,7 @@ enum attr_types
   };
 const static UNUSED char* attr_types_str[] =
   {
-    "SSTP_ATTRIB_NO_ERROR", 
+    "SSTP_ATTRIB_NO_ERROR",
     "SSTP_ATTRIB_ENCAPSULATED_PROTOCOL_ID",
     "SSTP_ATTRIB_STATUS_INFO",
     "SSTP_ATTRIB_CRYPTO_BINDING",
@@ -120,7 +120,7 @@ const static UNUSED char* attr_types_str[] =
 
 
 /* Crypto Binding Request Attribute */
-enum crypto_req_attrs 
+enum crypto_req_attrs
   {
     CERT_HASH_PROTOCOL_SHA1 = 0x01,
     CERT_HASH_PROTOCOL_SHA256 = 0x02
@@ -134,7 +134,7 @@ static UNUSED char* crypto_req_attrs_str[]=
 
 
 /* Status Info Attribute */
-enum attr_status 
+enum attr_status
   {
     ATTRIB_STATUS_NO_ERROR = 0x00000000,
     ATTRIB_STATUS_DUPLICATE_ATTRIBUTE = 0x00000001,
@@ -189,20 +189,20 @@ typedef struct __sstp_header
   uint8_t version;
   uint8_t reserved;
   uint16_t length;
-} sstp_header_t; 
+} sstp_header_t;
 
-typedef struct __sstp_control_header 
+typedef struct __sstp_control_header
 {
   uint16_t message_type;
   uint16_t num_attributes;
-} sstp_control_header_t; 
+} sstp_control_header_t;
 
-typedef struct __sstp_attribute_header 
+typedef struct __sstp_attribute_header
 {
   uint8_t reserved;
   uint8_t attribute_id;
   uint16_t packet_length;
-} sstp_attribute_header_t; 
+} sstp_attribute_header_t;
 
 /* attribute structures */
 typedef struct __sstp_attribute
@@ -243,7 +243,7 @@ typedef struct __sstp_attribute_status_info
   uint32_t status;
 } sstp_attribute_status_info_t;
 
-enum _flags 
+enum _flags
   {
     REMOTE_DISCONNECTION = 0x1,
     NEGOCIATION_TIMER_RAISED = 0x2,
@@ -251,7 +251,7 @@ enum _flags
   };
 
 /* sstp client context */
-typedef struct __sstp_context 
+typedef struct __sstp_context
 {
   unsigned char state;
   unsigned char flags;
@@ -263,7 +263,7 @@ typedef struct __sstp_context
   uint32_t nonce[8];
   uint32_t certhash[8];
   uint32_t cmk[8];
-  uint32_t cmac[8]; 
+  uint32_t cmac[8];
 } sstp_context_t;
 
 sstp_context_t* ctx;
@@ -280,7 +280,7 @@ typedef struct __sstp_session
 sstp_session_t* sess;
 
 
-typedef struct __chap_context 
+typedef struct __chap_context
 {
   unsigned char response_challenge[16];
   unsigned char response_reserved[8];
@@ -291,31 +291,17 @@ typedef struct __chap_context
 chap_context_t* chap_ctx;
 
 /* functions declarations  */
-void generate_guid(char data[]);
-int is_valid_header(sstp_header_t* header, ssize_t recv_len);
-int is_control_packet(sstp_header_t* packet_header);
-int https_session_negociation();
-void sstp_init();
-void sstp_loop(pid_t);
-int sstp_decode(void* rbuffer, ssize_t sstp_length);
-int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read); 
-void sstp_send(void* data, size_t data_length);
-void send_sstp_packet(uint8_t type, void* data, size_t data_length);
-void send_sstp_data_packet(void* data, size_t len); 
-void send_sstp_control_packet(uint16_t msg_type, void* attribute,
-                              uint16_t attribute_number, size_t attribute_len);
-void* create_attribute(uint8_t attribute_id, void* data, size_t data_length);
-int crypto_set_certhash();
-int crypto_set_binding(void* data);
-int crypto_set_cmac();
-int attribute_status_info(void* data, uint16_t attr_len);
-int sstp_fork(); 
 void set_client_status(uint8_t status);
+int https_session_negociation();
+void sstp_loop(pid_t);
+int sstp_fork();
+int sstp_decode(void* rbuffer, ssize_t sstp_length);
+
 
 /* crypto functions */
 uint8_t* sstp_hmac(unsigned char* key, unsigned char* d, uint16_t n);
 void NtPasswordHash(uint8_t *password_hash, const uint8_t *password, size_t password_len);
 void HashNtPasswordHash(uint8_t *password_hash_hash, const uint8_t *password_hash);
 void GetMasterKey(void* MasterKey, void* PasswordHashHash, void* NTResponse);
-void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey, 
+void GetAsymmetricStartKey(void* MasterSessionKey, void* MasterKey,
 			   uint8_t KeyLength, uint8_t IsSend, uint8_t IsServer);

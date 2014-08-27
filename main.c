@@ -5,17 +5,17 @@
  *
  *            GNU GENERAL PUBLIC LICENSE
  *              Version 2, June 1991
- * 
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (
  * at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
@@ -39,13 +39,25 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
-#include <gnutls/gnutls.h>
-#include <gnutls/x509.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/capability.h>
+
+#ifdef HAS_GNUTLS
+#include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
+#else
+#include <polarssl/net.h>
+#include <polarssl/debug.h>
+#include <polarssl/ssl.h>
+#include <polarssl/entropy.h>
+#include <polarssl/ctr_drbg.h>
+#include <polarssl/error.h>
+#include <polarssl/certs.h>
+#include <polarssl/version.h>
+#endif
 
 #include "main.h"
 #include "libsstp.h"
@@ -65,7 +77,7 @@
  * @param type : event type
  * @param fmt : format string
  */
-void xlog(int type, const char* fmt, ...) 
+void xlog(int type, const char* fmt, ...)
 {
   va_list ap;
   time_t t;
@@ -79,8 +91,8 @@ void xlog(int type, const char* fmt, ...)
       strftime(time_buf, 128, "%F %T", tm);
       fprintf(stderr, "%s  ", time_buf);
     /* } */
-  
-  switch (type) 
+
+  switch (type)
     {
     case LOG_DEBUG:
       fprintf(stderr, "[*] ");
@@ -97,8 +109,8 @@ void xlog(int type, const char* fmt, ...)
     default :
       break;
     }
-  
-  va_start(ap, fmt);  
+
+  va_start(ap, fmt);
   vfprintf(stderr, fmt, ap);
   fflush(stderr);
   va_end(ap);
@@ -119,15 +131,15 @@ void* xmalloc(size_t size)
       perror("xmalloc: try to allocate incorrect size");
       abort();
     }
-					     
+
   ptr = malloc(size);
-  
+
   if ( ptr == NULL )
     {
       perror("xmalloc: fail to allocate space");
       abort();
     }
-    
+
   memset(ptr, 0, size);
   return ptr;
 }
@@ -141,11 +153,11 @@ void* xmalloc(size_t size)
 void xfree(void* ptr)
 {
 
-  if (ptr) 
+  if (ptr)
     free(ptr);
   else
     xlog(LOG_ERROR, "Trying to free NULL pointer\n");
-  
+
 }
 
 
@@ -153,24 +165,29 @@ void xfree(void* ptr)
  * Usage
  *
  * @param name: argv[0]
- * @param retcode: indicates how program should exit 
+ * @param retcode: indicates how program should exit
  */
-void usage(char* name, int retcode)
+static void usage(char* name, int retcode)
 {
   FILE* fd;
-  
+
   fd = (retcode == 0) ? stdout : stderr;
-      
+
   fprintf(fd,
-	  "\n%s, version %.2f : "
-	  "SSTP VPN client for %s\n"
-	  "\n"
-	  "Usage (as root):\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
+	  "%s, version %.2f\n"
+	  "SSTP VPN client for Linux\n"
+          "Compiled with SSL library: "
+#ifdef HAS_GNUTLS
+          "GnuTLS %s\n"
+#else
+          "PolarSSL %s\n"
+#endif
+	  "Usage:\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
 	  "\t-s, --server=my.sstp.server.com (mandatory)\tSSTP Server URI\n"
 	  "\t-c, --ca-file=/path/to/ca_file (mandatory)\tPEM-format CA file\n"
 	  "\t-U, --username=USERNAME (mandatory)\t\tWindows username\n"
-	  "\t-P, --password=PASSWORD\t\t\t\tWindows password\n"	  
+	  "\t-P, --password=PASSWORD\t\t\t\tWindows password\n"
 	  "\t-p, --port=NUM\t\t\t\t\tAlternative server port\n"
 	  "\t-x, --pppd-path=/path/to/pppd\t\t\tpppd path\n"
 	  "\t-l, --logfile=/path/to/pppd_logfile\t\tLog pppd in file\n"
@@ -182,11 +199,13 @@ void usage(char* name, int retcode)
 	  "\t-h, --help\t\t\t\t\tShow this menu\n"
 	  "\n\n",
 	  PROGNAME, VERSION,
-#if defined __linux__
-	  "Linux",
+#ifdef HAS_GNUTLS
+          gnutls_check_version(NULL),
+#else
+          POLARSSL_VERSION_STRING,
 #endif
 	  name);
-  
+
   exit(retcode);
 }
 
@@ -197,7 +216,7 @@ void usage(char* name, int retcode)
  * @param prompt : string to display for password
  * @return 0 if all is good, -1 otherwise
  */
-int getpassword(const char* prompt)
+static int getpassword(const char* prompt)
 {
   int fd, rbytes;
   static char pwd[64];
@@ -218,15 +237,15 @@ int getpassword(const char* prompt)
 
   if (tcgetattr (fd, &orig) < 0)
     return -1;
-  
+
   no_echo = orig;
   no_echo.c_lflag &= ~ECHO;
-  
+
   if (tcsetattr (fd, TCSAFLUSH, &no_echo) < 0)
     return -1;
 
   rbytes = read(fd, pwd, 64);
-      
+
   switch (rbytes)
     {
     case -1:
@@ -244,14 +263,14 @@ int getpassword(const char* prompt)
       rbytes = 0;
       break;
     }
-  
+
   if (tcsetattr (fd, TCSAFLUSH, &orig) < 0)
     return -1;
-  
+
   close(fd);
   printf("\n");
   fflush(stdout);
-  
+
   return rbytes;
 }
 
@@ -262,10 +281,10 @@ int getpassword(const char* prompt)
  * @param argc: number of arguments
  * @param argv: argv
  */
-void parse_options (sstp_config* cfg, int argc, char** argv)
+static void parse_options (sstp_config* cfg, int argc, char** argv)
 {
   int curopt, curopt_idx;
- 
+
   const struct option long_opts[] = {
     { "help", 0, 0, 'h' },
     { "verbose", 0, 0, 'v' },
@@ -280,7 +299,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
     { "proxy", 1, 0, 'm' },
     { "proxy-port", 1, 0, 'n' },
     { "daemon", 0, 0, 'D' },
-    { 0, 0, 0, 0 } 
+    { 0, 0, 0, 0 }
   };
 
   while (1)
@@ -293,16 +312,16 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
 			    long_opts, &curopt_idx);
 
       if (curopt == -1) break;
-      
+
       switch (curopt)
 	{
 	case 'v': cfg->verbose++; break;
 	case 's': cfg->server = optarg; break;
 	case 'p': cfg->port = optarg; break;
 	case 'c': cfg->ca_file = optarg; break;
-	case 'U': cfg->username = optarg; break;	  
+	case 'U': cfg->username = optarg; break;
 	case 'P': cfg->password = optarg; break;
-	case 'x': cfg->pppd_path = optarg; break;	  
+	case 'x': cfg->pppd_path = optarg; break;
 	case 'l': cfg->logfile = optarg; break;
 	case 'd': cfg->domain = optarg; break;
 	case 'D': cfg->daemon = 1; break;
@@ -325,7 +344,7 @@ void parse_options (sstp_config* cfg, int argc, char** argv)
  *
  * @param argument : argument to be checked
  */
-void check_required_arg(char* argument)
+static void check_required_arg(char* argument)
 {
   if (argument == NULL)
     {
@@ -336,12 +355,12 @@ void check_required_arg(char* argument)
 
 
 /**
- * Validates presence of an optional argument. 
+ * Validates presence of an optional argument.
  *
  * @param argument : argument to be checked
  * @param default_value : default value to be used if undefined
  */
-void check_default_arg(char** argument, char* default_value)
+static void check_default_arg(char** argument, char* default_value)
 {
   if ((*argument) == NULL)
     {
@@ -356,26 +375,26 @@ void check_default_arg(char** argument, char* default_value)
  *
  * @return a socket (fd > 2) on success, a negative value on failure
  */
-sock_t init_tcp()
+static sock_t init_tcp()
 {
   sock_t sock;
   struct addrinfo hostinfo, *res, *ll;
   char *host, *port;
-  
+
   memset(&hostinfo, 0, sizeof(struct addrinfo));
   hostinfo.ai_family = AF_UNSPEC;
   hostinfo.ai_socktype = SOCK_STREAM;
   hostinfo.ai_flags = 0;
   hostinfo.ai_protocol = 0;
   sock = -1;
-  
+
   if (cfg->proxy)
     {
       xlog(LOG_INFO, "Using proxy %s:%s\n", cfg->proxy, cfg->proxy_port);
       host = cfg->proxy;
       port = cfg->proxy_port;
     }
-  else 
+  else
     {
       host = cfg->server;
       port = cfg->port;
@@ -386,63 +405,62 @@ sock_t init_tcp()
       xlog(LOG_ERROR, "getaddrinfo failed\n");
       if (cfg->verbose > 2)
 	xlog(LOG_DEBUG, "%s\n", strerror(errno));
-      
+
       freeaddrinfo(res);
       return -1;
     }
-  
+
   for (ll = res; ll; ll = ll->ai_next)
     {
       sock = socket(ll->ai_family,
 		    ll->ai_socktype,
 		    ll->ai_protocol);
-    
-      if (sock == -1) 
+
+      if (sock == -1)
 	{
 	  if (cfg->verbose)
-	    xlog(LOG_ERROR, "init_tcp: socket: %s\n", strerror(errno));		  
+	    xlog(LOG_ERROR, "init_tcp: socket: %s\n", strerror(errno));
 	  continue;
 	}
-      
+
       if (connect(sock, ll->ai_addr, ll->ai_addrlen) == 0)
 	break;
-      
+
       if (cfg->verbose)
 	xlog(LOG_ERROR, "init_tcp: connect: %s\n", strerror(errno));
-      
+
       close(sock);
       sock = -1;
     }
-  
+
   if (!ll || sock == -1)
     {
       xlog(LOG_ERROR, "Failed to create socket\n");
     }
-  else 
+  else
     {
       xlog(LOG_INFO,"Connected to %s:%s\n", host, port);
-      
+
       if (cfg->verbose > 2)
 	xlog(LOG_DEBUG, "Using fd %ld\n", sock);
     }
-  
+
   freeaddrinfo(res);
- 
+
   return sock;
 }
 
 
 /**
- * Establishes proxy CONNECT request to SSTP server. 
+ * Establishes proxy CONNECT request to SSTP server.
  *
- * @param sockfd
  * @return 0 if succeeded in connecting through proxy, negative otherwise
  */
-int proxy_connect(int sockfd) 
+static int proxy_connect()
 {
   char buffer[1024];
   int len;
-  
+
   memset(buffer, 0, 1024);
   len = snprintf(buffer, 1024,
 		 "CONNECT %s:%s HTTP/1.0\r\n"
@@ -450,10 +468,10 @@ int proxy_connect(int sockfd)
 		 "User-Agent: %s-%.2f\r\n\r\n",
 		 cfg->server, cfg->port,
 		 PROGNAME, VERSION);
-  
+
   if (cfg->verbose > 2)
     xlog(LOG_DEBUG, "Sending: %s\n", buffer);
-  
+
   if (write(sockfd, buffer, len) < 0 )
     {
       xlog(LOG_ERROR, "Failed to send CONNECT\n%s", strerror(errno));
@@ -461,7 +479,7 @@ int proxy_connect(int sockfd)
     }
 
   memset(buffer, 0, 1024);
-  if (read(sockfd, buffer, 1024) < 0) 
+  if (read(sockfd, buffer, 1024) < 0)
     {
       xlog(LOG_ERROR, "Failed to read CONNECT response\n%s", strerror(errno));
       return -1;
@@ -482,26 +500,28 @@ int proxy_connect(int sockfd)
 }
 
 /**
- * Wrapper socket in a GnuTLS session. There is no server certificate validation.
+ * Wrapper socket in a TLS session. There is no server certificate validation.
  *
  * @return 0 on success, or -1 on error.
  */
-int init_tls_session()
+static int init_tls_session()
 {
   int retcode;
+
+#ifdef HAS_GNUTLS
   const char* err;
-  
+
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
 
-  retcode = gnutls_priority_set_direct (tls, "SECURE256", &err);  
+  retcode = gnutls_priority_set_direct (tls, "SECURE256", &err);
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
 	xlog(LOG_ERROR, (char*)err);
       else
 	xlog(LOG_ERROR, "init_tls_session: gnutls_priority_set_direct: %s\n",
-	     gnutls_strerror(retcode));	
+	     gnutls_strerror(retcode));
       return -1;
     }
 
@@ -528,7 +548,7 @@ int init_tls_session()
 	   gnutls_strerror(retcode));
       return -1;
     }
-  
+
   gnutls_transport_set_ptr (tls, (gnutls_transport_ptr_t) sockfd);
 
   /* all ok, proceed with handshake */
@@ -539,10 +559,37 @@ int init_tls_session()
 	   gnutls_strerror(retcode));
       return -1;
     }
-  
-  retcode = check_tls_session();
-  if (retcode < 0 )
-    return -1;
+
+#else
+  memset(&tls, 0, sizeof(ssl_context));
+  x509_crt_init( &certificate);
+
+  entropy_init( &entropy );
+  retcode = ctr_drbg_init( &ctr_drbg, entropy_func, &entropy,
+                           (const unsigned char *) PROGNAME,
+                           strlen( PROGNAME ) );
+
+  if( ( retcode = ssl_init( &tls ) ) != 0 )
+  {
+          xlog(LOG_ERROR, "init_tls_session: ssl_init returned %d\n\n", retcode);
+          return -1;
+    }
+
+  ssl_set_endpoint( &tls, SSL_IS_CLIENT );
+  ssl_set_authmode( &tls, SSL_VERIFY_OPTIONAL );
+
+  ssl_set_rng( &tls, ctr_drbg_random, &ctr_drbg );
+  ssl_set_bio( &tls, net_recv, &sockfd, net_send, &sockfd );
+
+  while( ( retcode = ssl_handshake( &tls ) ) != 0 )
+  {
+          if( retcode != POLARSSL_ERR_NET_WANT_READ && retcode != POLARSSL_ERR_NET_WANT_WRITE )
+          {
+                xlog(LOG_ERROR, "init_tls_session: ssl_handshake returned -0x%x\n\n", -retcode );
+                return -1;
+          }
+  }
+#endif
 
   return 0;
 }
@@ -552,19 +599,20 @@ int init_tls_session()
  * Ends nicely TLS session
  *
  * @param reason: disconnection reason
- */ 
+ */
 void end_tls_session(int reason)
 {
   int retcode;
-  
+
+#ifdef HAS_GNUTLS
   retcode = gnutls_bye(tls, GNUTLS_SHUT_WR);
   if (retcode != GNUTLS_E_SUCCESS)
     xlog(LOG_ERROR, "end_tls_session: %s\n", gnutls_strerror(retcode));
- 
+
   retcode = shutdown(sockfd, SHUT_WR);
   if (retcode < 0)
     xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
-  
+
   retcode = close(sockfd);
   if (retcode < 0)
     xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
@@ -573,6 +621,23 @@ void end_tls_session(int reason)
   gnutls_x509_crt_deinit (certificate);
   gnutls_certificate_free_credentials(creds);
   gnutls_global_deinit();
+
+#else
+  ssl_close_notify( &tls );
+
+  retcode = shutdown(sockfd, SHUT_WR);
+  if (retcode < 0)
+    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
+
+  retcode = close(sockfd);
+  if (retcode < 0)
+    xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
+
+  x509_crt_free( &certificate );
+  ssl_free( &tls );
+  entropy_free( &entropy );
+  memset(&tls, 0, sizeof(ssl_context));
+#endif
 
   if (cfg->verbose)
     xlog(LOG_INFO, "End of TLS connection, reason: %s.\n", reason ? "Failure" : "Success");
@@ -583,15 +648,16 @@ void end_tls_session(int reason)
  * Checks if process has a capability.
  *
  * @param flag: capability flag (man 7 capabilities)
- * @return: TRUE if process has capability, FALSE otherwise, -1 in case of
- * error
+ * @return: TRUE if process has capability, FALSE otherwise, -1 in case of error
+ *
+ * @obsolete
  */
-int is_cap(cap_value_t flag)
+static int is_cap(cap_value_t flag)
 {
   cap_t caps = NULL;
   cap_flag_value_t cap_status = 0;
   int retcode;
-  
+
   caps = cap_get_proc();
 
   if (!caps)
@@ -600,19 +666,19 @@ int is_cap(cap_value_t flag)
       return -1;
     }
 
-  if (cap_get_flag(caps, flag, CAP_EFFECTIVE , &cap_status) == -1) 
+  if (cap_get_flag(caps, flag, CAP_EFFECTIVE , &cap_status) == -1)
     {
       xlog(LOG_ERROR, "Failed to get flag\n");
-      cap_free(caps);      
+      cap_free(caps);
       return -1;
     }
 
-  switch (cap_status) 
+  switch (cap_status)
     {
     case CAP_SET:
       retcode = TRUE;
       break;
-      
+
     case CAP_CLEAR:
     default:
       retcode = FALSE;
@@ -630,103 +696,24 @@ int is_cap(cap_value_t flag)
 
 
 /**
- * Give process capability
- *
- * @param flag: capability flag to set (man 7 capabilities)
- * @return: 0 if process acquired capability, -1 in case of error
- */
-int set_cap(cap_value_t flag)
-{
-  cap_t caps = NULL;
-    
-  caps = cap_get_proc();
-
-  if (!caps)
-    {
-      xlog(LOG_ERROR, "Error while getting caps\n");
-      return -1;
-    }
-
-  if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &flag, CAP_SET) == -1)
-    {
-      xlog(LOG_ERROR, "Error while settting flag\n");
-      return -1;
-    }
-
-  if (cap_set_proc(caps) == -1) 
-    {
-      xlog(LOG_ERROR, "Error while applying caps\n");
-      return -1;
-    }
-
-  if (cap_free(caps) == -1)
-    {
-      xlog(LOG_ERROR, "Fail to free caps\n");
-      return -1;
-    }
-
-  return 0;
-}
-
-
-/**
- * Unset capability
- *
- * @param flag: capability flag to unset (man 7 capabilities)
- * @return: 0 if capability was removed, -1 in case of error
- */
-int unset_cap(cap_value_t flags)
-{
-  cap_t caps = NULL;
-    
-  caps = cap_get_proc();
-
-  if (!caps)
-    {
-      xlog(LOG_ERROR,  "Error while getting caps\n");
-      return -1;
-    }
-
-  if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &flags, CAP_CLEAR) == -1)
-    {
-      xlog(LOG_ERROR, "failed to change cap\n");
-      return -1;
-    }
-
-  if (cap_set_proc(caps) == -1) 
-    {
-      xlog(LOG_ERROR, "Error while applying caps\n");
-      return -1;
-    }
-
-  if (cap_free(caps) == -1)
-    {
-      xlog(LOG_ERROR, "Fail to free caps\n");
-      return -1;
-    }
-
-  return 0;  
-}
-
-
-/**
  * Checks certificate list
  *
  * @return 0 if all is good, -1 if not.
  */
-int check_tls_session()
+static int check_tls_session()
 {
+#ifdef HAS_GNUTLS
   const gnutls_datum_t *certificate_list;
   unsigned int certificate_list_size;
   int retcode, i;
-   
+
   retcode = gnutls_certificate_type_get (tls);
   if (retcode != GNUTLS_CRT_X509)
     {
       xlog(LOG_ERROR, "check_tls_session: expected GNUTLS_CRT_X509 format\n");
       return -1;
     }
-  
+
   gnutls_x509_crt_init (&certificate);
   certificate_list = gnutls_certificate_get_peers (tls, &certificate_list_size);
   if (certificate_list == NULL)
@@ -734,27 +721,57 @@ int check_tls_session()
       xlog(LOG_ERROR, "check_tls_session: fail to get peers\n");
       return -1;
     }
-  
-  for (i=0; i<certificate_list_size; i++) 
+
+  for (i=0; i<certificate_list_size; i++)
     {
       retcode = gnutls_x509_crt_import (certificate, &certificate_list[i], GNUTLS_X509_FMT_DER);
       if (retcode == GNUTLS_E_SUCCESS) return 0;
     }
 
-  xlog(LOG_ERROR, "check_tls_session: fail to import certificate\n");  
+  xlog(LOG_ERROR, "check_tls_session: fail to import certificate\n");
   return -1;
+
+#else
+  int retcode;
+  if( ( retcode = ssl_get_verify_result( &tls ) ) != 0 ) {
+          if( ( retcode & BADCERT_EXPIRED ) != 0 ) {
+                  xlog(LOG_ERROR, "%s\n", "server certificate has expired" );
+                  return -1;
+          }
+
+          if( ( retcode & BADCERT_REVOKED ) != 0 ){
+                  xlog(LOG_ERROR, "%s\n", "server certificate has been revoked" );
+                  return -1;
+          }
+
+          if( ( retcode & BADCERT_CN_MISMATCH ) != 0 ){
+                  xlog(LOG_ERROR, "%s\n", "CN mismatch" );
+                  return -1;
+          }
+
+          if( ( retcode & BADCERT_NOT_TRUSTED ) != 0 ){
+                  xlog(LOG_WARNING, "%s\n", "Self-signed or not signed by a trusted CA");
+                  return 0;
+          }
+
+  } else
+          if (cfg->verbose)
+                  xlog(LOG_INFO, "%s\n", "Certificate is valid");
+  return 0;
+
+#endif
 }
 
 
 /**
  * Signal handling function.
- * 
+ *
  * @param signum : signal number
  */
 void sighandle(int signum)
 {
 
-  switch(signum) 
+  switch(signum)
     {
     case SIGALRM:
       xlog(LOG_ERROR, "Timer has expired, disconnecting\n");
@@ -765,7 +782,7 @@ void sighandle(int signum)
 	  if (ctx->flags & NEGOCIATION_TIMER_RAISED)
 	    xlog(LOG_ERROR, "NEGOCIATION_TIMER_RAISED flag raised\n");
 	}
-      
+
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
 
@@ -778,7 +795,7 @@ void sighandle(int signum)
     case SIGINT:
       if (cfg->verbose)
 	xlog(LOG_INFO, "Closing connection\n");
-      
+
       set_client_status(CLIENT_CALL_DISCONNECTED);
       break;
 
@@ -787,31 +804,31 @@ void sighandle(int signum)
 	xlog(LOG_INFO, "do_loop -> FALSE\n");
 
       do_loop = FALSE;
-      
+
       break;
-    
+
     }
 }
 
 
 /**
  * Change user
- * 
+ *
  * @param user: username to switch to
  * @return 0 if all good, -1 otherwise
  */
-int change_user(char* user) 
+int change_user(char* user)
 {
   struct passwd* pw_entry;
   int retcode = 0;
-  
+
   pw_entry = getpwnam(user);
-  
+
   if (!pw_entry)
     {
       xlog(LOG_ERROR, "Failed to get user '%s': %s\n",
 	   user, strerror(errno));
-      return -1;     
+      return -1;
     }
 
   retcode = setuid(pw_entry->pw_uid);
@@ -844,15 +861,16 @@ int main (int argc, char** argv, char** envp)
   struct sigaction saction;
   int retcode;
   pid_t pid = -1;
-  
-  
+  char *tempdir;
+
+
 #if !defined  __linux__
   xlog (LOG_ERROR, "Operating system not supported\n");
   return EXIT_FAILURE;
 #endif
 
   cfg = (sstp_config*) xmalloc(sizeof(sstp_config));
-    
+
   parse_options(cfg, argc, argv);
 
 
@@ -861,34 +879,34 @@ int main (int argc, char** argv, char** envp)
       /* got root ? */
       xlog (LOG_DEBUG, "%s is not running as root. Using capabilities\n",
 	    argv[0]);
-      
+
       /* or is capable ? *MUST* have KILL and SETEUID */
       retcode = is_cap(CAP_KILL);
-      if (retcode != TRUE) 
+      if (retcode != TRUE)
 	{
 	  xlog(LOG_ERROR, "Process not KILL capable. Check your privileges.\n");
 	  goto end;
 	}
       retcode = is_cap(CAP_SETUID);
-      if (retcode != TRUE) 
+      if (retcode != TRUE)
 	{
 	  xlog(LOG_ERROR, "Process is not SETEUID capable. Check your privileges.\n");
 	  goto end;
 	}
 
     }
-  else 
+  else
     {
       xlog (LOG_WARNING,
 	    "%s is running as root. This could be potentially dangerous\n"
 	    "You should consider using capabilities.\n",
 	    argv[0]);
     }
-  
+
   check_required_arg(cfg->server);
   check_required_arg(cfg->username);
   check_required_arg(cfg->ca_file);
-  
+
   retcode = access (cfg->ca_file, R_OK);
   if (retcode < 0)
     {
@@ -902,27 +920,27 @@ int main (int argc, char** argv, char** envp)
 	xlog(LOG_INFO, "No password specified, prompting for one.\n");
 
       retcode = getpassword("Password: ");
-      
+
       if (!cfg->password || retcode < 0)
 	{
 	  xlog(LOG_ERROR, "Failed to read password\n");
 	  if (errno && cfg->verbose > 2)
 	    xlog(LOG_ERROR, "errno: %s\n", strerror(errno));
-	  
+
 	  goto end;
 	}
     }
-  
+
   check_default_arg(&cfg->port, "443");
   check_default_arg(&cfg->pppd_path, "/usr/sbin/pppd");
 
   if (cfg->proxy)
     check_default_arg(&cfg->proxy_port, "8080");
-  
+
   if (cfg->proxy_port && !cfg->proxy)
     xlog(LOG_ERROR, "No PROXYHOST specified for PROXYPORT '%s'. Dropping.\n",
 	 cfg->proxy_port);
-  
+
   retcode = access (cfg->pppd_path, X_OK);
   if (retcode < 0)
     {
@@ -933,7 +951,7 @@ int main (int argc, char** argv, char** envp)
   if (cfg->verbose)
     xlog(LOG_INFO, "Verbose level: %d\n", cfg->verbose);
 
-  
+
   /* catch signal */
   memset(&saction, 0, sizeof(struct sigaction));
   saction.sa_handler = sighandle;
@@ -945,9 +963,9 @@ int main (int argc, char** argv, char** envp)
   sigaction(SIGCHLD, &saction, NULL);
   sigaction(SIGUSR1, &saction, NULL);
 
-  
+
   /* main starts here */
-  if (cfg->daemon) 
+  if (cfg->daemon)
     {
       if (cfg->verbose > 1)
 	xlog(LOG_DEBUG, "Starting daemon (send SIGINT to close properly)\n");
@@ -958,44 +976,52 @@ int main (int argc, char** argv, char** envp)
 	  goto end;
 	}
     }
-  
+
   if (cfg->verbose > 1)
     xlog (LOG_DEBUG, "Starting %s as %d\n", argv[0], getpid());
 
   /* create socket  */
-  sockfd = init_tcp(); 
-  if (sockfd < 0) 
+  sockfd = init_tcp();
+  if (sockfd < 0)
     {
       xlog(LOG_ERROR, "TCP socket has failed, leaving...\n");
       goto end;
     }
 
-  if (cfg->proxy != NULL) 
+  if (cfg->proxy != NULL)
     {
-      retcode = proxy_connect(sockfd);
-  
+      retcode = proxy_connect();
+
       if (retcode < 0)
 	goto end;
     }
 
-  
+
   /* drop privileges and change user */
   if (cfg->verbose)
     xlog(LOG_INFO, "Dropping privileges\n");
-  
-  retcode = chdir(NO_PRIV_DIR);  
+
+  tempdir = strdup(NO_PRIV_DIR) ;
+  if ( !mkdtemp(tempdir) )
+    {
+      xlog(LOG_ERROR, "Failed to `mkdtemp': %s\n", strerror(errno));
+      retcode = -1;
+      goto disco;
+    }
+
+  retcode = chdir(tempdir);
   if (retcode)
     {
-      xlog(LOG_ERROR, "%s\n", strerror(errno));
+      xlog(LOG_ERROR, "Failed to `chdir': %s\n", strerror(errno));
       retcode = -1;
-      goto disco; 
+      goto disco;
     }
   if (cfg->verbose > 1)
-    xlog(LOG_DEBUG, "chdir-ed '%s'\n", NO_PRIV_DIR);
+    xlog(LOG_DEBUG, "chdir-ed to'%s'\n", tempdir);
 
   /* if user is not root, all privileges can be dropped right now */
   /* otherwise, will be done after way down */
-  if (getuid() != 0) 
+  if (getuid() != 0)
     {
       retcode = change_user(NO_PRIV_USER);
       if (retcode < 0)
@@ -1003,7 +1029,7 @@ int main (int argc, char** argv, char** envp)
       if (cfg->verbose > 1)
 	xlog(LOG_DEBUG, "Switch user to '%s'\n", NO_PRIV_USER);
       }
-  
+
   /* create forked pppd process as suspended */
   pid = sstp_fork();
   if (pid <= 0)
@@ -1012,45 +1038,52 @@ int main (int argc, char** argv, char** envp)
       retcode = -1 ;
       goto disco;
     }
-  
+
   if (cfg->verbose)
     xlog (LOG_INFO, "'%s' forked with PID %d\n", cfg->pppd_path, pid);
 
-  
+
   /* wrap socket with tls socket */
-  retcode = init_tls_session(sockfd, &tls); 
+  retcode = init_tls_session();
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "TLS session initialization has failed, leaving.\n");
       goto disco;
     }
 
+  retcode = check_tls_session();
+  if (retcode < 0)
+    {
+      xlog(LOG_ERROR, "TLS session check failed, leaving.\n");
+      goto disco;
+    }
+
   if (cfg->verbose)
     xlog(LOG_INFO, "Initiating HTTPS negociation\n");
-  
-  retcode = https_session_negociation();  
+
+  retcode = https_session_negociation();
   if (retcode < 0)
     {
       xlog(LOG_ERROR, "An error occured in HTTPS negociation, leaving.\n");
       goto disco;
     }
 
-  
+
   /* wake up pppd */
   retcode = kill(pid, SIGUSR1);
-  if (retcode < 0) 
+  if (retcode < 0)
     {
       xlog(LOG_ERROR, "[FATAL] Failed to send signal %d to PID:%d\n", SIGUSR1, pid);
       if (cfg->verbose > 1)
 	xlog(LOG_ERROR, "Reason: %s\n", strerror(errno));
-      
+
       retcode = -1;
       goto disco;
     }
 
-  
+
   /* if sstoper was launched as root, we can drop privs here */
-  if (getuid() == 0) 
+  if (getuid() == 0)
     {
       retcode = change_user(NO_PRIV_USER);
       if (retcode < 0)
@@ -1064,16 +1097,18 @@ int main (int argc, char** argv, char** envp)
     xlog(LOG_INFO, "Initiating SSTP negociation\n");
 
   sleep(1);
-  
+
   sstp_loop(pid);
 
  disco:
+  unlink(tempdir);
+
   if (pid > 0)
-    kill(pid, SIGKILL);
-  
+    kill(pid, SIGTERM);
+
   retcode = !retcode ? EXIT_SUCCESS : EXIT_FAILURE;
   end_tls_session(retcode);
-  
+
  end :
   xfree(cfg);
   return retcode;
