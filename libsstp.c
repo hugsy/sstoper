@@ -85,15 +85,35 @@ static ssize_t sstp_read(unsigned char *buf, size_t buflen)
                 xlog(LOG_ERROR, "sstp_read: %s\n", gnutls_strerror(rbytes));
 
 #else
-  do {
-          rbytes = ssl_read(&tls, buf, buflen);
-          if(rbytes == POLARSSL_ERR_NET_WANT_READ || rbytes == POLARSSL_ERR_NET_WANT_WRITE)
-                  continue;
-          if(rbytes==POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY || rbytes == 0)
-                  break;
-          if (rbytes < 0)
-                  xlog(LOG_ERROR, "sstp_read: %d\n", rbytes);
-  } while(1);
+        int do_loop = 1;
+
+        char msg[512] = {0,};
+        do {
+                rbytes = ssl_read(&tls, buf, buflen);
+                if (rbytes < 0)
+                {
+                        error_strerror(rbytes, msg, sizeof(msg)-1);
+                        xlog(LOG_ERROR, "sstp_read() failed: %d - %s\n", rbytes, msg);
+                        return -1;
+                }
+
+                switch(rbytes)
+                {
+                        case POLARSSL_ERR_NET_WANT_READ:
+                        case POLARSSL_ERR_NET_WANT_WRITE:
+                                continue;
+
+                        case POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY:
+                        case 0:
+                                do_loop = 0;
+                                break;
+
+                        default:
+                              do_loop = 0;
+                              break;
+                }
+
+        } while( do_loop );
 #endif
 
   if (cfg->verbose)
@@ -118,15 +138,23 @@ static ssize_t sstp_write(unsigned char *buf, size_t buflen)
   sbytes = gnutls_record_send(tls, buf, buflen);
   if (sbytes < 0){
           xlog(LOG_ERROR, "sstp_write: %s\n", gnutls_strerror(sbytes));
+          return -1;
   }
 
 #else
+  char msg[512] = {0,};
+
   sbytes = ssl_write(&tls, buf, buflen);
-  if(sbytes != POLARSSL_ERR_NET_WANT_READ && sbytes != POLARSSL_ERR_NET_WANT_WRITE )
+  if (sbytes < 0)
   {
-          xlog(LOG_ERROR, "sstp_write: %d\n", sbytes);
-          sbytes = -1;
+          if(sbytes != POLARSSL_ERR_NET_WANT_READ && sbytes != POLARSSL_ERR_NET_WANT_WRITE )
+          {
+                  error_strerror(sbytes, msg, sizeof(msg)-1);
+                  xlog(LOG_ERROR, "sstp_write() failed: %x: %s\n", sbytes, msg);
+                  return -1;
+          }
   }
+
 #endif
 
   if (cfg->verbose)
@@ -378,16 +406,13 @@ static int is_control_packet(sstp_header_t* packet_header)
 int https_session_negociation()
 {
   ssize_t rbytes;
-  unsigned char buf[1024];
-  char guid[39];
+  unsigned char buf[1024] = {0, };
+  char guid[39] = {0, };
 
   rbytes = -1;
 
   /* Allocate SSTP session */
   sess = (sstp_session_t*) xmalloc(sizeof(sstp_session_t));
-
-  memset(guid, 0, 39);
-  memset(buf, 0, 1024);
 
   generate_guid(guid);
   rbytes = snprintf((char *)buf, 1024,
@@ -405,37 +430,42 @@ int https_session_negociation()
     xlog(LOG_DEBUG, "Sending: %lu bytes\n%s\n", rbytes, buf);
 
   /* Start negociation */
-  sstp_write(buf, rbytes);
+  if (sstp_write(buf, rbytes) < 0)
+  {
+          xlog(LOG_ERROR, "%s", "Failed to send the SSTP_DUPLEX_POST request\n");
+          return -1;
+  }
 
   memset(buf, 0, 1024);
   rbytes = sstp_read(buf, 1024);
+  if (rbytes < 0)
+  {
+          xlog(LOG_ERROR, "%s", "Failed to receive the SSTP_DUPLEX_POST response\n");
+          return -1;
+  }
 
-  if (rbytes > 0)
-    {
-      if (cfg->verbose)
-	{
-	  xlog(LOG_INFO , "<-- %lu bytes\n", rbytes);
+  if (rbytes == 0)
+  {
+          xlog(LOG_INFO, "Unexpected close notification from %s.\n", cfg->server);
+          return -1;
+  }
 
-	  if (cfg->verbose > 1)
-	    xlog(LOG_DEBUG , "Received: %s\n", buf);
-	}
+  if (cfg->verbose)
+  {
+          if (cfg->verbose > 1)
+                  xlog(LOG_DEBUG , "Received: %s\n", buf);
+  }
 
-      sess->rx_bytes += rbytes;
-    }
-  else if (rbytes == 0)
-    {
-      xlog(LOG_INFO, "Connection closed with %s.\n", cfg->server);
-      return -1;
-    }
-  else
-      return -1;
+  sess->rx_bytes += rbytes;
+  if (cfg->verbose > 2)
+          xlog(LOG_DEBUG, "Received: %lu bytes\n%s\n", rbytes, buf);
 
-  if (memcmp(buf, "HTTP/1.1 200", 12))
+  if (memcmp(buf, "HTTP/1.1 200", 12) && memcmp(buf, "HTTP/1.0 200", 12))
     {
       xlog(LOG_ERROR, "Incorrect HTTP response header\n");
       if (cfg->verbose > 2)
 	{
-	  buf[1023] = '\0';
+	  buf[sizeof(buf)-1] = '\0';
 	  xlog(LOG_DEBUG, "%s\n", buf);
 	}
 
@@ -571,11 +601,11 @@ void sstp_loop(pid_t pppd_pid)
   gettimeofday(&sess->tv_start, NULL);
 
   ctx = (sstp_context_t*) xmalloc(sizeof(sstp_context_t));
-  ctx->retry = SSTP_MAX_INIT_RETRY;
-  ctx->state = CLIENT_CALL_DISCONNECTED;
-  ctx->negociation_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
-  ctx->hello_timer.tv_sec = SSTP_NEGOCIATION_TIMER;
-  ctx->pppd_pid = pppd_pid;
+  ctx->retry                       = SSTP_MAX_INIT_RETRY;
+  ctx->state                       = CLIENT_CALL_DISCONNECTED;
+  ctx->negociation_timer.tv_sec    = SSTP_NEGOCIATION_TIMER;
+  ctx->hello_timer.tv_sec          = SSTP_NEGOCIATION_TIMER;
+  ctx->pppd_pid                    = pppd_pid;
 
   chap_ctx = (chap_context_t*) xmalloc(sizeof(chap_context_t));
 
@@ -711,12 +741,32 @@ int crypto_set_certhash()
       return -1;
     }
 #else
-  unsigned char ibuf[8192] = {0, };
+  unsigned char *ibuf;
+
   unsigned char obuf[8192] = {0, };
   size_t ibuflen, obuflen;
 
-  load_file(cfg->ca_file, (unsigned char **)&ibuf, &ibuflen);
-  convert_pem_to_der(ibuf, ibuflen, obuf, &obuflen);
+  if(cfg->verbose > 1)
+          xlog(LOG_DEBUG, "[polarssl] converting '%s' PEM -> DER format\n", cfg->ca_file);
+
+  if (load_file(cfg->ca_file, (unsigned char **)&ibuf, &ibuflen) < 0)
+  {
+          xlog(LOG_ERROR, "Failed to load '%s': %d - %s\n", cfg->ca_file, errno, strerror(errno));
+          return -1;
+  }
+
+  if (convert_pem_to_der(ibuf, ibuflen, obuf, &obuflen) < 0)
+  {
+          xlog(LOG_ERROR, "Failed to convert '%s' to DER\n", cfg->ca_file);
+          xfree(ibuf);
+          return -1;
+  }
+
+  xfree(ibuf);
+
+  if(cfg->verbose > 2)
+          xlog(LOG_DEBUG, "Converted '%s' PEM=%d bytes -> DER=%d bytes\n", cfg->ca_file, ibuflen, obuflen);
+
 #endif
 
   /* select hash algorithm */
@@ -799,7 +849,6 @@ int crypto_set_binding(void* data)
   /* compute ca file hash with chosen algorithm */
   if (crypto_set_certhash() < 0)
     return -1;
-
 
   /* change client state */
   set_client_status(CLIENT_CONNECT_ACK_RECEIVED);
@@ -1000,7 +1049,7 @@ int crypto_set_cmac()
  * @param bytes_to_read : `data` length
  * @return 0 if all good, negative value otherwise
  */
-static int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to_read)
+static int sstp_decode_attributes(uint16_t attrnum, void* data, size_t bytes_to_read)
 {
   void* attr_ptr;
   int retcode;
@@ -1030,17 +1079,19 @@ static int sstp_decode_attributes(uint16_t attrnum, void* data, ssize_t bytes_to
 
 
       /* checking attribute header*/
+      if (bytes_to_read < attribute_length)
+      {
+              xlog(LOG_ERROR, "Incorrect attribute length (received=%d,announced=%d).\n", bytes_to_read, attribute_length);
+              return -1;
+      }
+
       bytes_to_read -= attribute_length;
-      if (bytes_to_read < 0)
-	{
-	  xlog(LOG_ERROR, "Incorrect offset attempt. Leaving...\n");
-	  return -1;
-	}
+
       if (attribute_id > SSTP_ATTRIB_CRYPTO_BINDING_REQ)
-	{
+      {
 	  xlog(LOG_ERROR, "Incorrect attribute id.\n");
 	  return -1;
-	}
+      }
 
       /* parsing attribute header */
       if (cfg->verbose > 2)

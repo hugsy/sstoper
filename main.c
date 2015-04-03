@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <netdb.h>
 #include <pwd.h>
 #include <signal.h>
@@ -509,12 +510,22 @@ static int init_tls_session()
   int retcode;
 
 #ifdef HAS_GNUTLS
-  const char* err;
+  static const char *err;
+
+  /*
+   * On tested versions on Windows 2008 & 2012, enforcing support of TLS1.2 leads to
+   * an error "Error in the pull function".
+   *
+   * TODO: check if corrected in fully patched Windows version
+   */
+  static char *ciphersuite = "NORMAL:-VERS-TLS1.2";
 
   gnutls_global_init();
   gnutls_init(&tls, GNUTLS_CLIENT);
+  gnutls_session_set_ptr(tls, (void*) cfg->server);
+  gnutls_server_name_set(tls, GNUTLS_NAME_DNS, cfg->server, strlen(cfg->server));
 
-  retcode = gnutls_priority_set_direct (tls, "SECURE256", &err);
+  retcode = gnutls_priority_set_direct(tls, ciphersuite, &err);
   if (retcode != GNUTLS_E_SUCCESS)
     {
       if (retcode == GNUTLS_E_INVALID_REQUEST)
@@ -525,7 +536,7 @@ static int init_tls_session()
       return -1;
     }
 
-  retcode = gnutls_certificate_allocate_credentials (&creds);
+  retcode = gnutls_certificate_allocate_credentials(&creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
       xlog(LOG_ERROR, "init_tls_session: gnutls_certificate_allocate_credentials: %s\n",
@@ -536,12 +547,13 @@ static int init_tls_session()
   retcode = gnutls_certificate_set_x509_trust_file (creds, cfg->ca_file, GNUTLS_X509_FMT_PEM);
   if (retcode < 1 )
     {
-      xlog(LOG_ERROR, "init_tls_session: gnutls_certificate_set_x509_trust_file: %s\n",
+      xlog(LOG_ERROR, "init_tls_session: gnutls_certificate_set_x509_trust_file('%s') failed: %s\n",
+           cfg->ca_file,
 	   gnutls_strerror(retcode));
       return -1;
     }
 
-  retcode = gnutls_credentials_set (tls, GNUTLS_CRD_CERTIFICATE, &creds);
+  retcode = gnutls_credentials_set(tls, GNUTLS_CRD_CERTIFICATE, &creds);
   if (retcode != GNUTLS_E_SUCCESS )
     {
       xlog(LOG_ERROR, "init_tls_session: tls_credentials_set: %s",
@@ -549,21 +561,32 @@ static int init_tls_session()
       return -1;
     }
 
-  gnutls_transport_set_ptr (tls, (gnutls_transport_ptr_t) sockfd);
+  gnutls_transport_set_int(tls, sockfd);
+  gnutls_handshake_set_timeout(tls, GNUTLS_DEFAULT_HANDSHAKE_TIMEOUT);
 
   /* all ok, proceed with handshake */
-  retcode = gnutls_handshake (tls);
-  if (retcode != GNUTLS_E_SUCCESS)
-    {
-      xlog(LOG_ERROR, "init_tls_session: gnutls_handshake: %s\n",
-	   gnutls_strerror(retcode));
-      return -1;
-    }
+  do {
+          retcode = gnutls_handshake(tls);
+          if (gnutls_error_is_fatal(retcode))
+                  break;
+
+  } while (retcode < 0);
+
+  if (retcode < 0)
+  {
+          xlog(LOG_ERROR, "Handshake failed (returned %d): %s\n",
+               -retcode, gnutls_strerror(retcode));
+          return -1;
+  }
+
 
 #else
-  memset(&tls, 0, sizeof(ssl_context));
-  x509_crt_init( &certificate);
+  char ssl_strerror[512];
 
+  memset(&tls, 0, sizeof(ssl_context));
+  memset(ssl_strerror, 0, sizeof(ssl_strerror));
+
+  x509_crt_init( &certificate);
   entropy_init( &entropy );
   retcode = ctr_drbg_init( &ctr_drbg, entropy_func, &entropy,
                            (const unsigned char *) PROGNAME,
@@ -571,21 +594,34 @@ static int init_tls_session()
 
   if( ( retcode = ssl_init( &tls ) ) != 0 )
   {
-          xlog(LOG_ERROR, "init_tls_session: ssl_init returned %d\n\n", retcode);
+          error_strerror(retcode, ssl_strerror, sizeof(ssl_strerror)-1);
+          xlog(LOG_ERROR, "init_tls_session: ssl_init returned %d: %s\n",
+               retcode ,ssl_strerror);
           return -1;
     }
 
   ssl_set_endpoint( &tls, SSL_IS_CLIENT );
-  ssl_set_authmode( &tls, SSL_VERIFY_OPTIONAL );
+  ssl_set_authmode( &tls, SSL_VERIFY_NONE );
+
+  /* See comment in GnuTLS section */
+  ssl_set_min_version( &tls, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_1);
+  ssl_set_max_version( &tls, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_2);
 
   ssl_set_rng( &tls, ctr_drbg_random, &ctr_drbg );
   ssl_set_bio( &tls, net_recv, &sockfd, net_send, &sockfd );
 
-  while( ( retcode = ssl_handshake( &tls ) ) != 0 )
+  while( 1 )
   {
-          if( retcode != POLARSSL_ERR_NET_WANT_READ && retcode != POLARSSL_ERR_NET_WANT_WRITE )
+          retcode = ssl_handshake( &tls );
+          if (retcode == 0)
+                  break;
+
+          if( retcode != POLARSSL_ERR_NET_WANT_READ && \
+              retcode != POLARSSL_ERR_NET_WANT_WRITE )
           {
-                xlog(LOG_ERROR, "init_tls_session: ssl_handshake returned -0x%x\n\n", -retcode );
+                  error_strerror(retcode, ssl_strerror, sizeof(ssl_strerror)-1);
+                  xlog(LOG_ERROR, "init_tls_session: ssl_handshake (returns %#x): %s\n",
+                       -retcode, ssl_strerror);
                 return -1;
           }
   }
@@ -704,8 +740,8 @@ static int check_tls_session()
 {
 #ifdef HAS_GNUTLS
   const gnutls_datum_t *certificate_list;
-  unsigned int certificate_list_size;
-  int retcode, i;
+  unsigned int i, certificate_list_size;
+  int retcode;
 
   retcode = gnutls_certificate_type_get (tls);
   if (retcode != GNUTLS_CRT_X509)
@@ -844,7 +880,7 @@ int change_user(char* user)
 
 
 /**
- * Main function:
+ * Main function performs the following steps:
  * - set up signal handler
  * - parse & set upconfiguration
  * - initialize tcp connection
@@ -853,15 +889,15 @@ int change_user(char* user)
  *
  * @param argc: number of command-line argument
  * @param argv: array of command-line argument
- * @param envp: array of environment argument
+ *
  * @return EXIT_SUCCESS in a perfect world, EXIT_FAILURE otherwise
  */
-int main (int argc, char** argv, char** envp)
+int main (int argc, char** argv)
 {
   struct sigaction saction;
   int retcode;
   pid_t pid = -1;
-  char *tempdir;
+  char *tempdir = NULL;
 
 
 #if !defined  __linux__
@@ -898,8 +934,8 @@ int main (int argc, char** argv, char** envp)
   else
     {
       xlog (LOG_WARNING,
-	    "%s is running as root. This could be potentially dangerous\n"
-	    "You should consider using capabilities.\n",
+	    "%s is running as root. This could be potentially dangerous. "
+	    "Consider using capabilities.\n",
 	    argv[0]);
     }
 
@@ -913,6 +949,8 @@ int main (int argc, char** argv, char** envp)
       xlog(LOG_ERROR, "%s is not readable.\n", cfg->ca_file);
       goto end;
     }
+
+  cfg->ca_file = realpath(cfg->ca_file, NULL);
 
   if (!cfg->password)
     {
@@ -947,6 +985,8 @@ int main (int argc, char** argv, char** envp)
       xlog(LOG_ERROR, "Failed to access ppp binary.\n");
       goto end;
     }
+
+  cfg->pppd_path = realpath(cfg->pppd_path, NULL);
 
   if (cfg->verbose)
     xlog(LOG_INFO, "Verbose level: %d\n", cfg->verbose);
@@ -991,7 +1031,6 @@ int main (int argc, char** argv, char** envp)
   if (cfg->proxy != NULL)
     {
       retcode = proxy_connect();
-
       if (retcode < 0)
 	goto end;
     }
@@ -1059,6 +1098,10 @@ int main (int argc, char** argv, char** envp)
     }
 
   if (cfg->verbose)
+    xlog(LOG_INFO, "TLS session ready\n");
+
+
+  if (cfg->verbose)
     xlog(LOG_INFO, "Initiating HTTPS negociation\n");
 
   retcode = https_session_negociation();
@@ -1068,6 +1111,8 @@ int main (int argc, char** argv, char** envp)
       goto disco;
     }
 
+  if (cfg->verbose)
+    xlog(LOG_INFO, "HTTPS session ready\n");
 
   /* wake up pppd */
   retcode = kill(pid, SIGUSR1);
@@ -1110,6 +1155,9 @@ int main (int argc, char** argv, char** envp)
   end_tls_session(retcode);
 
  end :
+  xfree(tempdir);
+  xfree(cfg->pppd_path);
+  xfree(cfg->ca_file);
   xfree(cfg);
   return retcode;
 }

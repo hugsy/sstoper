@@ -1,55 +1,54 @@
 ################################################################################
 # SSToPer Makefile
 #
-# requires :
+# Requirements :
 # - openssl-devel
-# - libgnutls-devel
 # - libcap-devel
+#
+# For SSL, either one of:
+# - libgnutls-devel
+# - libpolarssl-devel
+#
+# To compile with PolarSSL: make USE_POLARSSL=1
+# To compile with GnuTLS: make USE_POLARSSL=0
 #
 
 PROGNAME	=	\"SSToPer\"
 AUTHOR		=	\"Christophe Alladoum\"
-VERSION		=	0.30
+VERSION		=	0.40
 ARCH		=	$(shell uname)
 DEBUG		=	0
+USE_POLARSSL	= 	0
 
 CC		=	cc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
 INC		= 	-I/usr/include
-CFLAGS		=	-O2 -Wall $(DEFINES) $(INC) $(LIB) -fstack-protector-all -fPIE
-LDFLAGS		= 	-lcrypto -lutil  -lcap -Wl,-z,relro -pie
-OBJECTS		=	main.o libsstp.o pem2der.o
+CFLAGS		=	$(DEFINES) $(INC) $(LIB) -Wall -Wextra
+LDFLAGS		= 	-lcrypto -lutil -lcap
+OBJECTS		=	main.o libsstp.o
 BIN		=	sstoper
 
-HAS_GNUTLS	= 	0
-HAS_POLARSSL	= 	1
-
-ifeq ($(shell uname -m), x86_64)
-LIB		= 	-L/usr/lib64
-else
-LIB		= 	-L/usr/lib
-endif
-
 ifeq ($(DEBUG), 1)
-DBGFLAGS	=	-ggdb -D DEBUG
-CFLAGS		+=	$(DBGFLAGS)
+CFLAGS		+=	-ggdb -DDEBUG -O0 -fsanitize=address
+else
+CFLAGS		+=	-O3 -fstack-protector-all -fPIE
+LDFLAGS		+= 	-Wl,-z,relro,-z,now -pie
 endif
 
-ifeq ($(HAS_POLARSSL), 1)
+ifeq ($(USE_POLARSSL), 1)
 CFLAGS		+=	-DHAS_POLARSSL
+OBJECTS		+=	pem2der.o
 LDFLAGS		+=	-lpolarssl
 else
 CFLAGS		+=	-DHAS_GNUTLS
 LDFLAGS		+=	-lgnutls
 endif
 
-ARGS		= 	-s tweety -c /tmp/certnew.cer -U test-sstp -P Hello1234 -vv
-
 SSTOPER_USR	= 	root
 SSTOPER_GRP	= 	sstoper
 
 
-.PHONY : clean all valgrind release snapshot check-syntax
+.PHONY : clean all release snapshot check-syntax check-leaks
 
 .c.o :
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -61,9 +60,6 @@ $(BIN) : $(OBJECTS)
 
 clean :
 	rm -fr -- $(OBJECTS) $(BIN) *~ *swp \#*\# *.core pppd_log ./docs/$(BIN).8.gz /tmp/sstoper-*
-
-valgrind:  $(BIN)
-	valgrind --leak-check=full --show-reachable=yes ./$(BIN) $(ARGS)
 
 snapshot: clean
 	git add . && git ci -m "$(shell date): Generating snapshot release" && \
@@ -89,3 +85,6 @@ uninstall: clean
 
 check-syntax:
 	$(CC) $(CFLAGS) -fsyntax-only $(CHK_SOURCES)
+
+check-leaks: $(BIN)
+	./$(BIN) -s dc-2012.vm -c tests/dc-2012.vm.pem -U jfrench -P Hello1234 -vv
