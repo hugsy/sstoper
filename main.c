@@ -50,14 +50,14 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
 #else
-#include <polarssl/net.h>
-#include <polarssl/debug.h>
-#include <polarssl/ssl.h>
-#include <polarssl/entropy.h>
-#include <polarssl/ctr_drbg.h>
-#include <polarssl/error.h>
-#include <polarssl/certs.h>
-#include <polarssl/version.h>
+#include <mbedtls/net.h>
+#include <mbedtls/debug.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/error.h>
+#include <mbedtls/certs.h>
+#include <mbedtls/version.h>
 #endif
 
 #include "main.h"
@@ -181,7 +181,7 @@ static void usage(char* name, int retcode)
 #ifdef HAS_GNUTLS
           "GnuTLS %s\n"
 #else
-          "PolarSSL %s\n"
+          "mbedSSL %s\n"
 #endif
 	  "Usage:\n\t%s -s server -c ca_file -U username [-P password] [OPTIONS+]\n"
 	  "\nOPTIONS:\n"
@@ -203,7 +203,7 @@ static void usage(char* name, int retcode)
 #ifdef HAS_GNUTLS
           gnutls_check_version(NULL),
 #else
-          POLARSSL_VERSION_STRING,
+          MBEDTLS_VERSION_STRING,
 #endif
 	  name);
 
@@ -583,43 +583,49 @@ static int init_tls_session()
 #else
   char ssl_strerror[512];
 
-  memset(&tls, 0, sizeof(ssl_context));
+  memset(&tls, 0, sizeof(mbedtls_ssl_context));
+  memset(&tls_conf, 0, sizeof(mbedtls_ssl_config));
   memset(ssl_strerror, 0, sizeof(ssl_strerror));
 
-  x509_crt_init( &certificate);
-  entropy_init( &entropy );
-  retcode = ctr_drbg_init( &ctr_drbg, entropy_func, &entropy,
-                           (const unsigned char *) PROGNAME,
-                           strlen( PROGNAME ) );
+  mbedtls_x509_crt_init( &certificate);
+  mbedtls_entropy_init( &entropy );
+  mbedtls_ctr_drbg_init( &ctr_drbg); //, mbedtls_entropy_func, &entropy,
+                           //(const unsigned char *) PROGNAME,
+                           //strlen( PROGNAME ) );
 
-  if( ( retcode = ssl_init( &tls ) ) != 0 )
+
+  mbedtls_ssl_init( &tls );
+  
+  /* PETER
+  if( ( retcode = mbedtls_ssl_init( &tls ) ) != 0 )
   {
-          error_strerror(retcode, ssl_strerror, sizeof(ssl_strerror)-1);
+          mbedtls_strerror(retcode, ssl_strerror, sizeof(ssl_strerror)-1);
           xlog(LOG_ERROR, "init_tls_session: ssl_init returned %d: %s\n",
                retcode ,ssl_strerror);
           return -1;
     }
+  */  
 
-  ssl_set_endpoint( &tls, SSL_IS_CLIENT );
-  ssl_set_authmode( &tls, SSL_VERIFY_NONE );
+  mbedtls_ssl_conf_endpoint( &tls_conf, MBEDTLS_SSL_IS_CLIENT );
+  mbedtls_ssl_conf_authmode( &tls_conf, MBEDTLS_SSL_VERIFY_NONE );
 
   /* See comment in GnuTLS section */
-  ssl_set_min_version( &tls, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_1);
-  ssl_set_max_version( &tls, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_2);
+  mbedtls_ssl_conf_min_version( &tls_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_1);
+  mbedtls_ssl_conf_max_version( &tls_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_2);
 
-  ssl_set_rng( &tls, ctr_drbg_random, &ctr_drbg );
-  ssl_set_bio( &tls, net_recv, &sockfd, net_send, &sockfd );
+  mbedtls_ssl_conf_rng( &tls_conf, mbedtls_ctr_drbg_random, &ctr_drbg );
+  mbedtls_ssl_set_bio( &tls, &sockfd, mbedtls_net_recv, mbedtls_net_send, NULL );
 
   while( 1 )
   {
-          retcode = ssl_handshake( &tls );
+          retcode = mbedtls_ssl_handshake( &tls );
           if (retcode == 0)
                   break;
 
-          if( retcode != POLARSSL_ERR_NET_WANT_READ && \
-              retcode != POLARSSL_ERR_NET_WANT_WRITE )
+          if( retcode != MBEDTLS_ERR_SSL_WANT_READ && \
+              retcode != MBEDTLS_ERR_SSL_WANT_WRITE )
           {
-                  error_strerror(retcode, ssl_strerror, sizeof(ssl_strerror)-1);
+                  mbedtls_strerror(retcode, ssl_strerror, sizeof(ssl_strerror)-1);
                   xlog(LOG_ERROR, "init_tls_session: ssl_handshake (returns %#x): %s\n",
                        -retcode, ssl_strerror);
                 return -1;
@@ -659,7 +665,7 @@ void end_tls_session(int reason)
   gnutls_global_deinit();
 
 #else
-  ssl_close_notify( &tls );
+  mbedtls_ssl_close_notify( &tls );
 
   retcode = shutdown(sockfd, SHUT_WR);
   if (retcode < 0)
@@ -669,10 +675,10 @@ void end_tls_session(int reason)
   if (retcode < 0)
     xlog(LOG_ERROR, "end_tls_session: %s\n", strerror(errno));
 
-  x509_crt_free( &certificate );
-  ssl_free( &tls );
-  entropy_free( &entropy );
-  memset(&tls, 0, sizeof(ssl_context));
+  mbedtls_x509_crt_free( &certificate );
+  mbedtls_ssl_free( &tls );
+  mbedtls_entropy_free( &entropy );
+  memset(&tls, 0, sizeof(mbedtls_ssl_context));
 #endif
 
   if (cfg->verbose)
@@ -769,23 +775,23 @@ static int check_tls_session()
 
 #else
   int retcode;
-  if( ( retcode = ssl_get_verify_result( &tls ) ) != 0 ) {
-          if( ( retcode & BADCERT_EXPIRED ) != 0 ) {
+  if( ( retcode = mbedtls_ssl_get_verify_result( &tls ) ) != 0 ) {
+          if( ( retcode & MBEDTLS_X509_BADCERT_EXPIRED ) != 0 ) {
                   xlog(LOG_ERROR, "%s\n", "server certificate has expired" );
                   return -1;
           }
 
-          if( ( retcode & BADCERT_REVOKED ) != 0 ){
+          if( ( retcode & MBEDTLS_X509_BADCERT_REVOKED ) != 0 ){
                   xlog(LOG_ERROR, "%s\n", "server certificate has been revoked" );
                   return -1;
           }
 
-          if( ( retcode & BADCERT_CN_MISMATCH ) != 0 ){
+          if( ( retcode & MBEDTLS_X509_BADCERT_CN_MISMATCH ) != 0 ){
                   xlog(LOG_ERROR, "%s\n", "CN mismatch" );
                   return -1;
           }
 
-          if( ( retcode & BADCERT_NOT_TRUSTED ) != 0 ){
+          if( ( retcode & MBEDTLS_X509_BADCERT_NOT_TRUSTED ) != 0 ){
                   xlog(LOG_WARNING, "%s\n", "Self-signed or not signed by a trusted CA");
                   return 0;
           }
