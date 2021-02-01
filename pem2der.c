@@ -1,58 +1,69 @@
 /*
  *  Convert PEM to DER
  *
- *  Copyright (C) 2006-2013, Brainspark B.V.
+ *  Copyright The Mbed TLS Contributors
+ *  SPDX-License-Identifier: Apache-2.0
  *
- *  This file is part of PolarSSL (http://www.polarssl.org)
- *  Lead Maintainer: Paul Bakker <polarssl_maintainer at polarssl.org>
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *  not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
  *
- *  All rights reserved.
+ *  http://www.apache.org/licenses/LICENSE-2.0
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
  */
 
-#if !defined(POLARSSL_CONFIG_FILE)
-#include "polarssl/config.h"
+#if !defined(MBEDTLS_CONFIG_FILE)
+#include "mbedtls/config.h"
 #else
-#include POLARSSL_CONFIG_FILE
+#include MBEDTLS_CONFIG_FILE
 #endif
 
-#include <string.h>
-#include <stdlib.h>
+#if defined(MBEDTLS_PLATFORM_C)
+#include "mbedtls/platform.h"
+#else
 #include <stdio.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <stdlib.h>
+#define mbedtls_free            free
+#define mbedtls_calloc          calloc
+#define mbedtls_printf          printf
+#define mbedtls_exit            exit
+#define MBEDTLS_EXIT_SUCCESS    EXIT_SUCCESS
+#define MBEDTLS_EXIT_FAILURE    EXIT_FAILURE
+#endif /* MBEDTLS_PLATFORM_C */
 
-#include "polarssl/error.h"
-#include "polarssl/base64.h"
+#if defined(MBEDTLS_BASE64_C) && defined(MBEDTLS_FS_IO)
+#include "mbedtls/error.h"
+#include "mbedtls/base64.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#endif
 
 #define DFL_FILENAME            "file.pem"
 #define DFL_OUTPUT_FILENAME     "file.der"
 
-#if !defined(POLARSSL_BASE64_C) || !defined(POLARSSL_FS_IO)
-int main( int argc, char *argv[] )
-{
-    ((void) argc);
-    ((void) argv);
+#define USAGE \
+    "\n usage: pem2der param=<>...\n"                   \
+    "\n acceptable parameters:\n"                       \
+    "    filename=%%s         default: file.pem\n"      \
+    "    output_file=%%s      default: file.der\n"      \
+    "\n"
 
-    printf("POLARSSL_BASE64_C and/or POLARSSL_FS_IO not defined.\n");
-    return( 0 );
+#if !defined(MBEDTLS_BASE64_C) || !defined(MBEDTLS_FS_IO)
+int main( void )
+{
+    mbedtls_printf("MBEDTLS_BASE64_C and/or MBEDTLS_FS_IO not defined.\n");
+    mbedtls_exit( 0 );
 }
 #else
+
+
 /*
  * global options
  */
@@ -88,14 +99,14 @@ int convert_pem_to_der( const unsigned char *input, size_t ilen,
     if( s2 <= s1 || s2 > end )
         return( -1 );
 
-    ret = base64_decode( NULL, &len, (const unsigned char *) s1, s2 - s1 );
-    if( ret == POLARSSL_ERR_BASE64_INVALID_CHARACTER )
+    ret = mbedtls_base64_decode( NULL, 0, &len, (const unsigned char *) s1, s2 - s1 );
+    if( ret == MBEDTLS_ERR_BASE64_INVALID_CHARACTER )
         return( ret );
 
     if( len > *olen )
         return( -1 );
 
-    if( ( ret = base64_decode( output, &len, (const unsigned char *) s1,
+    if( ( ret = mbedtls_base64_decode( output, len, &len, (const unsigned char *) s1,
                                s2 - s1 ) ) != 0 )
     {
         return( ret );
@@ -106,64 +117,48 @@ int convert_pem_to_der( const unsigned char *input, size_t ilen,
     return( 0 );
 }
 
-
-static int get_file_length(const char* path)
-{
-        int fd, i;
-        ssize_t r;
-        char c;
-
-        fd = open(path, O_RDONLY);
-        if (fd < 0)
-                return -1;
-        printf("len=%d\n", fd);
-        for(i=0; ;i++)
-        {
-                r = read(fd, &c, 1);
-                if(r < 0) {
-                        i = -1;
-                        break;
-                }
-
-                if (r==0)
-                        break;
-        }
-
-        close(fd);
-
-        return i;
-}
-
-
 /*
  * Load all data from a file into a given buffer.
  */
 int load_file( const char *path, unsigned char **buf, size_t *n )
 {
-        int fd;
-        ssize_t r;
+    FILE *f;
+    long size;
 
-        int i = get_file_length(path);
-        if (i < 0)
-                return -1;
+    if( ( f = fopen( path, "rb" ) ) == NULL )
+        return( -1 );
 
-        *n = i;
+    fseek( f, 0, SEEK_END );
+    if( ( size = ftell( f ) ) == -1 )
+    {
+        fclose( f );
+        return( -1 );
+    }
+    fseek( f, 0, SEEK_SET );
 
-        fd = open(path, O_RDONLY);
-        if (fd < 0)
-                return -1;
+    *n = (size_t) size;
 
-        *buf = malloc(*n+1);
-        if(!*buf)
-                return -1;
+    if( *n + 1 == 0 ||
+        ( *buf = mbedtls_calloc( 1, *n + 1 ) ) == NULL )
+    {
+        fclose( f );
+        return( -1 );
+    }
 
-        r = read(fd, *buf, *n);
-        if(r < 0)
-                return -1;
+    if( fread( *buf, 1, *n, f ) != *n )
+    {
+        fclose( f );
+        free( *buf );
+        *buf = NULL;
+        return( -1 );
+    }
 
-        close(fd);
+    fclose( f );
 
-        return *n;
+    (*buf)[*n] = '\0';
+
+    return( 0 );
 }
 
-#endif
+
+#endif /* MBEDTLS_BASE64_C && MBEDTLS_FS_IO */

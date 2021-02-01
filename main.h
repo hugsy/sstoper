@@ -77,10 +77,11 @@ gnutls_session_t tls;
 gnutls_x509_crt_t certificate;
 gnutls_certificate_credentials_t creds;
 #else
-entropy_context entropy;
-ctr_drbg_context ctr_drbg;
-ssl_context tls;
-x509_crt certificate;
+mbedtls_entropy_context entropy;
+mbedtls_ctr_drbg_context ctr_drbg;
+mbedtls_ssl_context tls;
+mbedtls_ssl_config tls_conf;
+mbedtls_x509_crt certificate;
 #endif
 
 sock_t sockfd;

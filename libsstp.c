@@ -49,13 +49,13 @@
 #include <gnutls/x509.h>
 #include <gnutls/gnutls.h>
 #else
-#include <polarssl/net.h>
-#include <polarssl/debug.h>
-#include <polarssl/ssl.h>
-#include <polarssl/entropy.h>
-#include <polarssl/ctr_drbg.h>
-#include <polarssl/error.h>
-#include <polarssl/certs.h>
+#include <mbedtls/net.h>
+#include <mbedtls/debug.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/error.h>
+#include <mbedtls/certs.h>
 
 #include "pem2der.h"
 #endif
@@ -89,21 +89,21 @@ static ssize_t sstp_read(unsigned char *buf, size_t buflen)
 
         char msg[512] = {0,};
         do {
-                rbytes = ssl_read(&tls, buf, buflen);
+                rbytes = mbedtls_ssl_read(&tls, buf, buflen);
                 if (rbytes < 0)
                 {
-                        error_strerror(rbytes, msg, sizeof(msg)-1);
+                        mbedtls_strerror(rbytes, msg, sizeof(msg)-1);
                         xlog(LOG_ERROR, "sstp_read() failed: %d - %s\n", rbytes, msg);
                         return -1;
                 }
 
                 switch(rbytes)
                 {
-                        case POLARSSL_ERR_NET_WANT_READ:
-                        case POLARSSL_ERR_NET_WANT_WRITE:
+                        case MBEDTLS_ERR_SSL_WANT_READ:
+                        case MBEDTLS_ERR_SSL_WANT_WRITE:
                                 continue;
 
-                        case POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY:
+                        case MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY:
                         case 0:
                                 do_loop = 0;
                                 break;
@@ -144,12 +144,12 @@ static ssize_t sstp_write(unsigned char *buf, size_t buflen)
 #else
   char msg[512] = {0,};
 
-  sbytes = ssl_write(&tls, buf, buflen);
+  sbytes = mbedtls_ssl_write(&tls, buf, buflen);
   if (sbytes < 0)
   {
-          if(sbytes != POLARSSL_ERR_NET_WANT_READ && sbytes != POLARSSL_ERR_NET_WANT_WRITE )
+          if(sbytes != MBEDTLS_ERR_SSL_WANT_READ && sbytes != MBEDTLS_ERR_SSL_WANT_WRITE )
           {
-                  error_strerror(sbytes, msg, sizeof(msg)-1);
+                  mbedtls_strerror(sbytes, msg, sizeof(msg)-1);
                   xlog(LOG_ERROR, "sstp_write() failed: %x: %s\n", sbytes, msg);
                   return -1;
           }

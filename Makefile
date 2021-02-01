@@ -9,8 +9,8 @@
 # - libgnutls-devel
 # - libpolarssl-devel
 #
-# To compile with PolarSSL: make USE_POLARSSL=1
-# To compile with GnuTLS: make USE_POLARSSL=0
+# To compile with mbedTLS: make USE_MBEDTLS=1
+# To compile with GnuTLS: make USE_MBEDTLS=0
 #
 
 PROGNAME	=	\"SSToPer\"
@@ -18,7 +18,7 @@ AUTHOR		=	\"Christophe Alladoum\"
 VERSION		=	0.40
 ARCH		=	$(shell uname)
 DEBUG		=	0
-USE_POLARSSL	= 	0
+USE_MBED_TLS	= 	0
 
 CC		=	cc
 DEFINES		= 	-D PROGNAME=$(PROGNAME) -D VERSION=$(VERSION)
@@ -35,10 +35,10 @@ CFLAGS		+=	-O3 -fstack-protector-all -fPIE
 LDFLAGS		+= 	-Wl,-z,relro,-z,now -pie
 endif
 
-ifeq ($(USE_POLARSSL), 1)
-CFLAGS		+=	-DHAS_POLARSSL
+ifeq ($(USE_MBEDTLS), 1)
+CFLAGS		+=	-DHAS_MBEDTLS
 OBJECTS		+=	pem2der.o
-LDFLAGS		+=	-lpolarssl
+LDFLAGS		+=	-lmbedtls -lmbedx509 -lmbedcrypto
 else
 CFLAGS		+=	-DHAS_GNUTLS
 LDFLAGS		+=	-lgnutls
